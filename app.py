@@ -928,103 +928,79 @@ DOM: Fortalecimento de pernas
 # ══════════════════════════════════════════════
 
 def make_pdf(suggestion, ath, runs, atl, ctl, tsb):
-    import io, locale
+    """Generates a clean, Apple-inspired PDF mirroring the Treinos tab view.
+    Shows: header, weekly plan with full day-card details, análise honesta, alerta."""
+    import io
     from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer,
-                                    Table, TableStyle, HRFlowable, KeepTogether)
+                                    Table, TableStyle, KeepTogether)
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import ParagraphStyle
     from reportlab.lib.units import mm
     from reportlab.lib import colors
+    from reportlab.lib.enums import TA_LEFT, TA_CENTER
 
     PAGE_W, PAGE_H = A4
-    ML, MR, MT, MB = 22*mm, 22*mm, 38*mm, 22*mm
+    ML, MR, MT, MB = 20*mm, 20*mm, 18*mm, 16*mm
     CONTENT_W = PAGE_W - ML - MR
 
     # ── Paleta ────────────────────────────────────────────
     ORANGE  = colors.HexColor("#FC4C02")
-    ORANGE2 = colors.HexColor("#FF6B35")
     DARK    = colors.HexColor("#1D1D1F")
     MID     = colors.HexColor("#3A3A3C")
-    GREY    = colors.HexColor("#6E6E73")
+    GREY    = colors.HexColor("#86868B")
     LIGHT   = colors.HexColor("#F5F5F7")
     DIVIDER = colors.HexColor("#E5E5EA")
-    GREEN   = colors.HexColor("#1A8A3A")
-    YELLOW  = colors.HexColor("#B85C00")
-    RED     = colors.HexColor("#D70015")
+    BLUE    = colors.HexColor("#007AFF")
     WHITE   = colors.white
 
     hoje = datetime.now()
     nome = ath.get("nome", "Atleta")
-    nivel = ath.get("nivel", "intermediário").capitalize()
-    objetivo = ath.get("objetivo", "")
 
-    # ── Decoração de página (header + footer em todas) ──
+    # ── Page decoration — minimal footer only ────────────
     def draw_page(cv, doc):
         cv.saveState()
-        # Banda laranja no topo
+        # Thin top accent line
         cv.setFillColor(ORANGE)
-        cv.rect(0, PAGE_H - 26*mm, PAGE_W, 26*mm, fill=1, stroke=0)
-        # Listra de acento
-        cv.setFillColor(colors.HexColor("#D94000"))
-        cv.rect(0, PAGE_H - 27.5*mm, PAGE_W, 1.5*mm, fill=1, stroke=0)
-        # Texto do header
-        cv.setFillColor(WHITE)
-        cv.setFont("Helvetica-Bold", 13)
-        cv.drawString(ML, PAGE_H - 14*mm, "RUNNING COACH")
-        cv.setFont("Helvetica", 8.5)
-        cv.setFillColor(colors.HexColor("#FFD0B8"))
-        cv.drawString(ML, PAGE_H - 21*mm, f"Powered by Strava + Claude AI")
-        cv.setFillColor(WHITE)
-        cv.setFont("Helvetica", 9)
-        cv.drawRightString(PAGE_W - MR, PAGE_H - 14*mm,
-                           f"{nome}  ·  {hoje.strftime('%d/%m/%Y')}")
+        cv.rect(0, PAGE_H - 2.5*mm, PAGE_W, 2.5*mm, fill=1, stroke=0)
         # Footer
-        cv.setFillColor(DIVIDER)
-        cv.rect(ML, MB - 6*mm, CONTENT_W, 0.4, fill=1, stroke=0)
-        cv.setFont("Helvetica", 7.5)
+        cv.setFont("Helvetica", 7)
         cv.setFillColor(GREY)
-        cv.drawString(ML, MB - 10*mm, "Strava Running Coach  ·  Análise gerada por Claude AI")
-        cv.drawRightString(PAGE_W - MR, MB - 10*mm, f"Página {doc.page}")
+        cv.drawString(ML, 8*mm,
+                      f"Strava Running Coach  ·  {nome}  ·  {hoje.strftime('%d/%m/%Y')}")
+        cv.drawRightString(PAGE_W - MR, 8*mm, f"{doc.page}")
         cv.restoreState()
 
-    # ── Estilos ───────────────────────────────────────────
+    # ── Styles ────────────────────────────────────────────
     S = {
-        "title":   ParagraphStyle("title",  fontName="Helvetica-Bold", fontSize=28,
-                                  textColor=DARK, spaceAfter=1*mm, leading=32),
-        "sub":     ParagraphStyle("sub",    fontName="Helvetica",      fontSize=11,
-                                  textColor=GREY, spaceAfter=6*mm),
-        "section": ParagraphStyle("section",fontName="Helvetica-Bold", fontSize=11,
-                                  textColor=ORANGE, spaceBefore=4*mm, spaceAfter=2.5*mm),
-        "body":    ParagraphStyle("body",   fontName="Helvetica",      fontSize=9.5,
-                                  textColor=MID, spaceAfter=2*mm, leading=14),
-        "bullet":  ParagraphStyle("bullet", fontName="Helvetica",      fontSize=9.5,
-                                  textColor=MID, leftIndent=5*mm, spaceAfter=2*mm, leading=14),
-        "lbl":     ParagraphStyle("lbl",    fontName="Helvetica",      fontSize=7,
-                                  textColor=WHITE, alignment=1),
-        "val":     ParagraphStyle("val",    fontName="Helvetica-Bold", fontSize=16,
-                                  textColor=WHITE, alignment=1, leading=18),
-        "val_sub": ParagraphStyle("val_sub",fontName="Helvetica",      fontSize=7.5,
-                                  textColor=colors.HexColor("#FFD0B8"), alignment=1),
-        "th":      ParagraphStyle("th",     fontName="Helvetica-Bold", fontSize=7.5,
-                                  textColor=WHITE, alignment=1),
-        "td":      ParagraphStyle("td",     fontName="Helvetica",      fontSize=8.5,
-                                  textColor=DARK,  alignment=0),
-        "td_c":    ParagraphStyle("td_c",   fontName="Helvetica",      fontSize=8.5,
-                                  textColor=DARK,  alignment=1),
-        "td_run":  ParagraphStyle("td_run", fontName="Helvetica-Bold", fontSize=8,
-                                  textColor=ORANGE, alignment=1),
-        "td_walk": ParagraphStyle("td_walk",fontName="Helvetica-Bold", fontSize=8,
-                                  textColor=GREEN,  alignment=1),
+        "hero":     ParagraphStyle("hero", fontName="Helvetica-Bold", fontSize=24,
+                                   textColor=DARK, leading=28, spaceAfter=1*mm),
+        "hero_sub": ParagraphStyle("hero_sub", fontName="Helvetica", fontSize=10,
+                                   textColor=GREY, spaceAfter=6*mm),
+        "sec":      ParagraphStyle("sec", fontName="Helvetica-Bold", fontSize=12,
+                                   textColor=DARK, spaceBefore=5*mm, spaceAfter=3*mm,
+                                   leading=14),
+        "day_name": ParagraphStyle("day_name", fontName="Helvetica-Bold", fontSize=10,
+                                   textColor=DARK, leading=13),
+        "day_type": ParagraphStyle("day_type", fontName="Helvetica-Bold", fontSize=8,
+                                   textColor=ORANGE, leading=10),
+        "day_type_rest": ParagraphStyle("day_type_rest", fontName="Helvetica", fontSize=8,
+                                        textColor=GREY, leading=10),
+        "day_type_str": ParagraphStyle("day_type_str", fontName="Helvetica-Bold", fontSize=8,
+                                       textColor=BLUE, leading=10),
+        "day_meta": ParagraphStyle("day_meta", fontName="Helvetica", fontSize=8.5,
+                                   textColor=GREY, leading=12),
+        "day_desc": ParagraphStyle("day_desc", fontName="Helvetica", fontSize=8.5,
+                                   textColor=MID, leading=13, spaceAfter=1*mm),
+        "seg_lbl":  ParagraphStyle("seg_lbl", fontName="Helvetica-Bold", fontSize=7.5,
+                                   textColor=GREY, leading=10),
+        "seg_item": ParagraphStyle("seg_item", fontName="Helvetica", fontSize=8.5,
+                                   textColor=MID, leftIndent=3*mm, leading=12),
+        "body":     ParagraphStyle("body", fontName="Helvetica", fontSize=9,
+                                   textColor=MID, leading=13.5, spaceAfter=1.5*mm),
+        "bullet":   ParagraphStyle("bullet", fontName="Helvetica", fontSize=9,
+                                   textColor=MID, leftIndent=4*mm, leading=13.5,
+                                   spaceAfter=1.5*mm),
     }
-
-    # ── Dados ─────────────────────────────────────────────
-    run_only_pdf  = [r for r in runs if not r.get("_is_walk")]
-    walk_only_pdf = [r for r in runs if r.get("_is_walk")]
-    ref_pdf = run_only_pdf if run_only_pdf else runs
-    total_km = sum(r["distance"] for r in run_only_pdf) / 1000
-    avg_pace = fmt_pace(sum(r.get("average_speed",0) for r in ref_pdf) / len(ref_pdf)) if ref_pdf else "—"
-    tsb_txt, _ = tsb_label(tsb)
-    tsb_bg = GREEN if tsb >= 0 else (colors.HexColor("#FF9500") if tsb >= -10 else RED)
 
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4,
@@ -1032,168 +1008,238 @@ def make_pdf(suggestion, ath, runs, atl, ctl, tsb):
                             topMargin=MT, bottomMargin=MB)
     story = []
 
-    # ── Cabeçalho hero ────────────────────────────────────
-    story.append(Paragraph(nome, S["title"]))
-    sub_parts = [nivel]
-    if objetivo: sub_parts.append(objetivo)
+    # ── Hero header ──────────────────────────────────────
+    story.append(Spacer(1, 2*mm))
+    story.append(Paragraph("Plano da Semana", S["hero"]))
+    sub_parts = [nome]
+    obj = ath.get("objetivo", "")
+    if obj:
+        sub_parts.append(obj)
     sub_parts.append(hoje.strftime("%d de %B de %Y"))
-    story.append(Paragraph("  ·  ".join(sub_parts), S["sub"]))
+    story.append(Paragraph("  ·  ".join(sub_parts), S["hero_sub"]))
 
-    # ── Cards de métricas ─────────────────────────────────
-    def mcard(lbl, val, sub, bg=ORANGE):
-        inner = Table([
-            [Paragraph(lbl, S["lbl"])],
-            [Paragraph(str(val), S["val"])],
-            [Paragraph(sub, S["val_sub"])],
-        ], colWidths=[CONTENT_W/4 - 2*mm])
-        inner.setStyle(TableStyle([
-            ("BACKGROUND", (0,0), (-1,-1), bg),
-            ("ALIGN",      (0,0), (-1,-1), "CENTER"),
-            ("VALIGN",     (0,0), (-1,-1), "MIDDLE"),
-            ("TOPPADDING", (0,0), (-1,-1), 3),
-            ("BOTTOMPADDING",(0,0),(-1,-1),3),
-        ]))
-        return inner
+    # ── Thin divider ─────────────────────────────────────
+    story.append(Table(
+        [[""]], colWidths=[CONTENT_W], rowHeights=[0.4*mm],
+        style=[("BACKGROUND", (0,0), (-1,-1), DIVIDER)]
+    ))
+    story.append(Spacer(1, 2*mm))
 
-    cw = CONTENT_W / 4
-    metrics = Table([[
-        mcard("VOLUME 28 DIAS", f"{total_km:.1f} km",
-              f"{len(run_only_pdf)} corridas"),
-        mcard("PACE MÉDIO",     avg_pace,
-              "corridas"),
-        mcard("ATL / CTL",      f"{atl} / {ctl}",
-              "fadiga / condicionamento"),
-        mcard("FORMA (TSB)",    f"{tsb:+.1f}",
-              tsb_txt, bg=tsb_bg),
-    ]], colWidths=[cw]*4, rowHeights=22*mm)
-    metrics.setStyle(TableStyle([
-        ("VALIGN",      (0,0), (-1,-1), "MIDDLE"),
-        ("LEFTPADDING", (0,0), (-1,-1), 1),
-        ("RIGHTPADDING",(0,0), (-1,-1), 1),
-    ]))
-    story.append(metrics)
-    story.append(Spacer(1, 5*mm))
+    # ── Extract "Treino de hoje" detail from AI ──────────
+    hoje_detail = None
+    sections_ai = re.split(r'\n(?=## )', suggestion.strip())
+    for sec_ai in sections_ai:
+        if "Treino de hoje" in sec_ai:
+            lns = sec_ai.strip().splitlines()[1:]
+            hoje_detail = "\n".join(lns).strip()
+            break
 
-    # ── Função de separador de seção ─────────────────────
-    def sec(title):
-        tbl = Table(
-            [[Paragraph(title, S["section"])]],
-            colWidths=[CONTENT_W],
-            rowHeights=[8*mm],
-            style=[
-                ("VALIGN",        (0,0), (-1,-1), "MIDDLE"),
-                ("LEFTPADDING",   (0,0), (-1,-1), 6),
-                ("TOPPADDING",    (0,0), (-1,-1), 0),
-                ("BOTTOMPADDING", (0,0), (-1,-1), 0),
-                ("LINEBELOW",     (0,0), (-1,-1), 0.4, DIVIDER),
-                ("LINEBEFORE",    (0,0), (0,-1),  2.5, ORANGE),
-            ],
-        )
-        return tbl
+    dias_pt = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
+    hoje_nome = dias_pt[hoje.weekday()] if hoje.weekday() < 7 else ""
 
-    # ── Tabela de atividades ──────────────────────────────
-    lbl_a = (f"Histórico de Atividades — {len(run_only_pdf)} corridas" +
-             (f" + {len(walk_only_pdf)} caminhadas" if walk_only_pdf else ""))
-    story.append(sec(lbl_a))
-
-    col_w = [22*mm, 22*mm, 25*mm, 21*mm, 25*mm, 19*mm]
-    hdr = [Paragraph(h, S["th"]) for h in
-           ["DATA", "TIPO", "DISTÂNCIA", "DURAÇÃO", "PACE", "CARGA"]]
-    act_rows = [hdr]
-    for r in runs[:12]:
-        is_w = r.get("_is_walk", False)
-        carga_str = f"{run_load(r,ath):.0f}" + (" ♻" if is_w else "")
-        act_rows.append([
-            Paragraph(r["start_date"][:10],               S["td_c"]),
-            Paragraph("Caminhada" if is_w else "Corrida",
-                      S["td_walk"] if is_w else S["td_run"]),
-            Paragraph(fmt_dist(r["distance"]),             S["td_c"]),
-            Paragraph(fmt_dur(r.get("moving_time",0)),     S["td_c"]),
-            Paragraph(fmt_pace(r.get("average_speed")),    S["td_c"]),
-            Paragraph(carga_str,                           S["td_c"]),
-        ])
-    act_tbl = Table(act_rows, colWidths=col_w, repeatRows=1)
-    act_tbl.setStyle(TableStyle([
-        ("BACKGROUND",     (0,0), (-1,0),  DARK),
-        ("TEXTCOLOR",      (0,0), (-1,0),  WHITE),
-        ("ALIGN",          (0,0), (-1,0),  "CENTER"),
-        ("TOPPADDING",     (0,0), (-1,0),  5),
-        ("BOTTOMPADDING",  (0,0), (-1,0),  5),
-        ("ROWBACKGROUNDS", (0,1), (-1,-1), [WHITE, LIGHT]),
-        ("LINEBELOW",      (0,0), (-1,-1), 0.3, DIVIDER),
-        ("BOX",            (0,0), (-1,-1), 0.5, DIVIDER),
-        ("TOPPADDING",     (0,1), (-1,-1), 4),
-        ("BOTTOMPADDING",  (0,1), (-1,-1), 4),
-        ("LEFTPADDING",    (0,0), (-1,-1), 5),
-        ("RIGHTPADDING",   (0,0), (-1,-1), 5),
-        ("VALIGN",         (0,0), (-1,-1), "MIDDLE"),
-        ("FONTSIZE",       (0,0), (-1,-1), 8.5),
-    ]))
-    story.append(act_tbl)
-    story.append(Spacer(1, 4*mm))
-
-    # ── Plano Semanal Detalhado ─────────────────────────────
+    # ── Day cards ────────────────────────────────────────
     plan = parse_weekly_plan(suggestion)
-    if plan:
-        story.append(sec("Plano Semanal Detalhado"))
-        plan_col_w = [25*mm, 30*mm, 20*mm, 25*mm, CONTENT_W - 100*mm]
-        plan_hdr = [Paragraph(h, S["th"]) for h in
-                    ["DIA", "TIPO", "DIST.", "PACE", "DESCRIÇÃO"]]
-        plan_rows = [plan_hdr]
-        for entry in plan:
-            tipo_txt = entry.get("tipo", "")
-            if entry.get("is_rest"):
-                tipo_color = GREY
-            elif entry.get("is_strength"):
-                tipo_color = colors.HexColor("#007AFF")
-            else:
-                tipo_color = ORANGE
-            desc_text = entry.get("descricao", "")
-            # Truncate very long descriptions for PDF
-            if len(desc_text) > 120:
-                desc_text = desc_text[:117] + "..."
-            plan_rows.append([
-                Paragraph(entry.get("dia_nome", ""), S["td"]),
-                Paragraph(f'<font color="#{tipo_color.hexval()[2:]}">{tipo_txt}</font>',
-                          S["td"]),
-                Paragraph(entry.get("distancia", "—") or "—", S["td_c"]),
-                Paragraph(entry.get("pace", "—") or "—", S["td_c"]),
-                Paragraph(desc_text or "—", S["td"]),
-            ])
-        plan_tbl = Table(plan_rows, colWidths=plan_col_w, repeatRows=1)
-        plan_tbl.setStyle(TableStyle([
-            ("BACKGROUND",     (0,0), (-1,0),  DARK),
-            ("TEXTCOLOR",      (0,0), (-1,0),  WHITE),
-            ("ALIGN",          (0,0), (-1,0),  "CENTER"),
-            ("TOPPADDING",     (0,0), (-1,0),  5),
-            ("BOTTOMPADDING",  (0,0), (-1,0),  5),
-            ("ROWBACKGROUNDS", (0,1), (-1,-1), [WHITE, LIGHT]),
-            ("LINEBELOW",      (0,0), (-1,-1), 0.3, DIVIDER),
-            ("BOX",            (0,0), (-1,-1), 0.5, DIVIDER),
-            ("TOPPADDING",     (0,1), (-1,-1), 4),
-            ("BOTTOMPADDING",  (0,1), (-1,-1), 4),
-            ("LEFTPADDING",    (0,0), (-1,-1), 5),
-            ("RIGHTPADDING",   (0,0), (-1,-1), 5),
-            ("VALIGN",         (0,0), (-1,-1), "MIDDLE"),
-            ("FONTSIZE",       (0,0), (-1,-1), 8.5),
-        ]))
-        story.append(plan_tbl)
-        story.append(Spacer(1, 4*mm))
+    HALF_W = CONTENT_W / 2 - 1.5*mm
 
-    # ── Análise da IA ─────────────────────────────────────
-    strip = lambda t: "".join(c for c in t if ord(c) < 0x2500)
-    for line in suggestion.splitlines():
-        c = strip(line.rstrip()).strip()
-        if not c:
-            story.append(Spacer(1, 1.5*mm)); continue
-        if c.startswith("## "):
-            story.append(sec(c[3:].strip()))
-        elif c.startswith("- "):
-            fmt = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', c[2:])
-            story.append(Paragraph("• " + fmt, S["bullet"]))
-        elif not (c.startswith("(") and c.endswith(")")):
-            fmt = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', c)
-            story.append(Paragraph(fmt, S["body"]))
+    def _build_day_card(entry):
+        """Build a list of flowables for a single day card."""
+        card_items = []
+        dia = entry["dia_nome"]
+        is_today = (dia == hoje_nome)
+
+        if entry["is_rest"]:
+            # Rest day — simple minimal card
+            row = Table(
+                [[Paragraph(dia, S["day_name"]),
+                  Paragraph("DESCANSO", S["day_type_rest"])]],
+                colWidths=[HALF_W * 0.55, HALF_W * 0.45],
+                style=[
+                    ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+                    ("LEFTPADDING", (0,0), (-1,-1), 0),
+                    ("RIGHTPADDING", (0,0), (-1,-1), 0),
+                    ("TOPPADDING", (0,0), (-1,-1), 0),
+                    ("BOTTOMPADDING", (0,0), (-1,-1), 0),
+                    ("ALIGN", (1,0), (1,0), "RIGHT"),
+                ]
+            )
+            card_items.append(row)
+            desc = entry.get("descricao", "Dia de descanso")
+            card_items.append(Spacer(1, 1.5*mm))
+            card_items.append(Paragraph(desc, S["day_desc"]))
+
+        elif entry["is_strength"]:
+            row = Table(
+                [[Paragraph(dia, S["day_name"]),
+                  Paragraph("FORTALECIMENTO", S["day_type_str"])]],
+                colWidths=[HALF_W * 0.55, HALF_W * 0.45],
+                style=[
+                    ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+                    ("LEFTPADDING", (0,0), (-1,-1), 0),
+                    ("RIGHTPADDING", (0,0), (-1,-1), 0),
+                    ("TOPPADDING", (0,0), (-1,-1), 0),
+                    ("BOTTOMPADDING", (0,0), (-1,-1), 0),
+                    ("ALIGN", (1,0), (1,0), "RIGHT"),
+                ]
+            )
+            card_items.append(row)
+            card_items.append(Spacer(1, 1.5*mm))
+            card_items.append(Paragraph("Fortalecimento de pernas", S["day_desc"]))
+
+        else:
+            # Workout day — full detail
+            tipo = entry.get("tipo", "Treino")
+            day_type_s = ParagraphStyle("dt", parent=S["day_type"],
+                                        textColor=ORANGE)
+            row = Table(
+                [[Paragraph(dia + (" · hoje" if is_today else ""), S["day_name"]),
+                  Paragraph(tipo.upper(), day_type_s)]],
+                colWidths=[HALF_W * 0.55, HALF_W * 0.45],
+                style=[
+                    ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+                    ("LEFTPADDING", (0,0), (-1,-1), 0),
+                    ("RIGHTPADDING", (0,0), (-1,-1), 0),
+                    ("TOPPADDING", (0,0), (-1,-1), 0),
+                    ("BOTTOMPADDING", (0,0), (-1,-1), 0),
+                    ("ALIGN", (1,0), (1,0), "RIGHT"),
+                ]
+            )
+            card_items.append(row)
+
+            # Distance + Pace meta line
+            meta_parts = []
+            if entry.get("distancia"):
+                meta_parts.append(entry["distancia"])
+            if entry.get("pace"):
+                meta_parts.append(entry["pace"])
+            if meta_parts:
+                card_items.append(Spacer(1, 1.5*mm))
+                card_items.append(Paragraph("  ·  ".join(meta_parts), S["day_meta"]))
+
+            # If this is today and we have full AI detail, use it
+            if is_today and hoje_detail:
+                card_items.append(Spacer(1, 2*mm))
+                for ln in hoje_detail.splitlines():
+                    ln = _strip_emoji(ln.strip())
+                    if not ln:
+                        continue
+                    ln = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', ln)
+                    if ln.startswith("- "):
+                        card_items.append(Paragraph(
+                            '<font color="#FC4C02">&#8226;</font>  ' + ln[2:],
+                            S["bullet"]))
+                    else:
+                        card_items.append(Paragraph(ln, S["body"]))
+            else:
+                # Use structured description
+                desc = entry.get("descricao", "")
+                if desc:
+                    card_items.append(Spacer(1, 2*mm))
+                    segments = [s.strip() for s in desc.split("+") if s.strip()]
+                    if len(segments) > 1:
+                        card_items.append(Paragraph("ESTRUTURA", S["seg_lbl"]))
+                        card_items.append(Spacer(1, 1*mm))
+                        for seg in segments:
+                            card_items.append(Paragraph(
+                                '<font color="#FC4C02">&#8250;</font>  ' + seg,
+                                S["seg_item"]))
+                    else:
+                        card_items.append(Paragraph(desc, S["day_desc"]))
+
+        return card_items
+
+    # Helper to strip emojis (Helvetica can't render them) — used in cards + sections
+    _strip_emoji = lambda t: re.sub(
+        r'[\U0001F300-\U0001FAFF\U00002702-\U000027B0\U0000FE00-\U0000FE0F'
+        r'\U0000200D\U00002600-\U000026FF\U00002700-\U000027BF]+', '', t).strip()
+
+    if plan:
+        story.append(Paragraph("Plano da semana", S["sec"]))
+
+        for entry in plan:
+            card_items = _build_day_card(entry)
+
+            # Card border color
+            if entry["is_rest"]:
+                border_color = DIVIDER
+                bg = LIGHT
+            elif entry["is_strength"]:
+                border_color = BLUE
+                bg = WHITE
+            else:
+                border_color = ORANGE
+                bg = WHITE
+
+            # Wrap card content in a table that acts as a card container
+            inner_tbl = Table(
+                [[item] for item in card_items],
+                colWidths=[CONTENT_W - 8*mm],
+                style=[
+                    ("LEFTPADDING",   (0,0), (-1,-1), 0),
+                    ("RIGHTPADDING",  (0,0), (-1,-1), 0),
+                    ("TOPPADDING",    (0,0), (-1,-1), 0),
+                    ("BOTTOMPADDING", (0,0), (-1,-1), 0.5*mm),
+                ]
+            )
+
+            card_wrapper = Table(
+                [[inner_tbl]],
+                colWidths=[CONTENT_W],
+                style=[
+                    ("BACKGROUND",    (0,0), (-1,-1), bg),
+                    ("ROUNDEDCORNERS", [3*mm, 3*mm, 3*mm, 3*mm]),
+                    ("LEFTPADDING",   (0,0), (-1,-1), 4*mm),
+                    ("RIGHTPADDING",  (0,0), (-1,-1), 4*mm),
+                    ("TOPPADDING",    (0,0), (-1,-1), 3*mm),
+                    ("BOTTOMPADDING", (0,0), (-1,-1), 3*mm),
+                    ("LINEBEFORE",    (0,0), (0,-1), 2.5, border_color),
+                    ("BOX",           (0,0), (-1,-1), 0.3, DIVIDER),
+                ]
+            )
+
+            story.append(KeepTogether([card_wrapper, Spacer(1, 2.5*mm)]))
+
+    # ── AI Analysis sections (Análise honesta + Alerta) ──
+    for sec_ai in sections_ai:
+        lines = sec_ai.strip().splitlines()
+        if not lines:
+            continue
+        header = lines[0].replace("## ", "").strip()
+
+        # Only include Análise honesta and Alerta do treinador
+        include = False
+        if "nálise" in header.lower():
+            include = True
+        elif "lerta" in header.lower():
+            include = True
+        if not include:
+            continue
+
+        body_lines = lines[1:]
+        clean_header = _strip_emoji(header)
+
+        # Section header
+        story.append(Spacer(1, 2*mm))
+        story.append(Table(
+            [[""]], colWidths=[CONTENT_W], rowHeights=[0.3*mm],
+            style=[("BACKGROUND", (0,0), (-1,-1), DIVIDER)]
+        ))
+        story.append(Spacer(1, 1*mm))
+        story.append(Paragraph(clean_header, S["sec"]))
+
+        for ln in body_lines:
+            ln = ln.strip()
+            if not ln:
+                continue
+            ln = _strip_emoji(ln)
+            if not ln:
+                continue
+            ln = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', ln)
+            if ln.startswith("- "):
+                story.append(Paragraph(
+                    '<font color="#FC4C02">&#8226;</font>  ' + ln[2:],
+                    S["bullet"]))
+            elif not (ln.startswith("(") and ln.endswith(")")):
+                story.append(Paragraph(ln, S["body"]))
 
     doc.build(story, onFirstPage=draw_page, onLaterPages=draw_page)
     buf.seek(0)
