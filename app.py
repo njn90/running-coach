@@ -60,19 +60,7 @@ header[data-testid="stHeader"] { background: transparent !important; }
     margin: 0 auto !important;
 }
 
-/* ── Tabs em grid 2×2 no mobile ───────────── */
-[data-testid="stTabs"] > div:first-child {
-    display: flex !important;
-    flex-wrap: wrap !important;
-    gap: 0 !important;
-}
-[data-testid="stTabs"] > div:first-child > button {
-    flex: 1 1 45% !important;
-    min-width: 45% !important;
-    font-size: 0.82rem !important;
-    padding: 0.6rem 0.4rem !important;
-    white-space: nowrap !important;
-}
+/* ── Tabs em grid 2×2 ─────────────────────── */
 
 /* Mobile responsive */
 @media (max-width: 768px) {
@@ -289,10 +277,11 @@ header[data-testid="stHeader"] { background: transparent !important; }
 }
 .stSlider > div { padding: 0 0.2rem; }
 
-/* ── Tabs ───────────────────────────────────── */
+/* ── Tabs (grid 2×2 para caber no mobile) ──── */
 .stTabs [data-baseweb="tab-list"] {
     background: transparent !important;
-    gap: 0 !important;
+    gap: 4px !important;
+    flex-wrap: wrap !important;
     border-bottom: 1.5px solid rgba(0,0,0,0.08) !important;
     padding-bottom: 0 !important;
     margin-bottom: 1.5rem !important;
@@ -300,6 +289,10 @@ header[data-testid="stHeader"] { background: transparent !important; }
 .stTabs [data-baseweb="tab"] {
     background: transparent !important;
     color: #6E6E73 !important;
+    flex: 1 1 calc(50% - 4px) !important;
+    min-width: calc(50% - 4px) !important;
+    max-width: calc(50% - 2px) !important;
+    justify-content: center !important;
     font-family: 'Inter', sans-serif !important;
     font-weight: 500 !important;
     font-size: 0.9rem !important;
@@ -1323,26 +1316,20 @@ def compute_weekly_km(runs):
 
 
 def render_weekly_km_chart(weekly_data):
-    """Renders a simple HTML bar chart for weekly km."""
+    """Renders weekly km using native Streamlit bar_chart for reliability."""
     if not weekly_data:
         st.info("Dados insuficientes para o gráfico semanal.")
         return
-    max_km = max(w["km"] for w in weekly_data) if weekly_data else 1
-    bars_html = ""
-    for w in weekly_data:
-        pct = (w["km"] / max_km * 100) if max_km > 0 else 0
-        bars_html += f"""
-        <div style="display:flex;align-items:center;margin-bottom:0.6rem">
-            <div style="min-width:100px;font-size:0.78rem;color:#6E6E73;font-weight:500">{w['week_label']}</div>
-            <div style="flex:1;background:#F5F5F7;border-radius:8px;height:28px;overflow:hidden;margin:0 0.8rem">
-                <div style="width:{pct:.0f}%;background:linear-gradient(90deg,#FC4C02,#FF6B35);height:100%;border-radius:8px;transition:width 0.4s ease"></div>
-            </div>
-            <div style="min-width:55px;font-size:0.88rem;font-weight:700;color:#1D1D1F;text-align:right">{w['km']:.1f} km</div>
-        </div>"""
-    st.markdown(f"""<div class="card" style="padding:1.4rem 1.6rem">
-        <p style="font-size:0.72rem;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:#6E6E73;margin-bottom:1rem">Volume semanal (km)</p>
-        {bars_html}
-    </div>""", unsafe_allow_html=True)
+    import pandas as pd
+    df = pd.DataFrame(weekly_data)
+    df = df.rename(columns={"week_label": "Semana", "km": "km"})
+    df = df.set_index("Semana")
+    st.markdown(
+        '<p style="font-size:0.72rem;font-weight:600;text-transform:uppercase;'
+        'letter-spacing:0.06em;color:#6E6E73;margin-bottom:0.5rem">'
+        'Volume semanal (km)</p>',
+        unsafe_allow_html=True)
+    st.bar_chart(df, color="#FC4C02", height=220)
 
 
 # ══════════════════════════════════════════════
