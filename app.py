@@ -60,6 +60,20 @@ header[data-testid="stHeader"] { background: transparent !important; }
     margin: 0 auto !important;
 }
 
+/* ── Tabs em grid 2×2 no mobile ───────────── */
+[data-testid="stTabs"] > div:first-child {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    gap: 0 !important;
+}
+[data-testid="stTabs"] > div:first-child > button {
+    flex: 1 1 45% !important;
+    min-width: 45% !important;
+    font-size: 0.82rem !important;
+    padding: 0.6rem 0.4rem !important;
+    white-space: nowrap !important;
+}
+
 /* Mobile responsive */
 @media (max-width: 768px) {
     .block-container { padding: 1rem 1rem 3rem !important; }
@@ -452,6 +466,17 @@ hr { border: none !important; border-top: 1.5px solid rgba(0,0,0,0.06) !importan
 """
 
 # ══════════════════════════════════════════════
+# PERSISTENT TOKEN STORE (sobrevive a reruns e screen lock)
+# ══════════════════════════════════════════════
+
+@st.cache_resource
+def _get_persistent_store():
+    """Dict global que persiste enquanto o app estiver rodando no Cloud.
+       Sobrevive a reruns, troca de aba, e screen lock do celular.
+       Só reseta quando o app dorme completamente (~15min inativo)."""
+    return {"strava_tokens": None}
+
+# ══════════════════════════════════════════════
 # SESSION STATE HELPERS (Cloud-adapted)
 # ══════════════════════════════════════════════
 
@@ -504,11 +529,18 @@ def save_athlete_profile(athlete_dict):
     st.session_state.athlete = athlete_dict
 
 def get_strava_tokens():
-    """Retorna tokens do Strava armazenados em session_state."""
+    """Retorna tokens do Strava — busca em persistent store primeiro."""
+    store = _get_persistent_store()
+    if store.get("strava_tokens"):
+        # Sincroniza com session_state
+        st.session_state.strava_tokens = store["strava_tokens"]
+        return store["strava_tokens"]
     return st.session_state.strava_tokens
 
 def save_strava_tokens(tokens):
-    """Salva tokens do Strava em session_state."""
+    """Salva tokens no persistent store E no session_state."""
+    store = _get_persistent_store()
+    store["strava_tokens"] = tokens
     st.session_state.strava_tokens = tokens
 
 # ══════════════════════════════════════════════
@@ -1366,10 +1398,10 @@ def main():
 
     # ── Tabs (sempre visíveis) ─────────────────
     tab_treinos, tab_resumo, tab_config_treino, tab_config_app = st.tabs([
-        "  🏃 Treinos da Semana  ",
-        "  📊 Resumo últimos 30 dias  ",
-        "  ⚙️ Configurações treino  ",
-        "  🔧 Configurações app  ",
+        "🏃 Treinos",
+        "📊 Resumo 30d",
+        "⚙️ Config Treino",
+        "🔧 Config App",
     ])
 
     # ══════════════════════════════════════════
