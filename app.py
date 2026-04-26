@@ -192,31 +192,52 @@ header[data-testid="stHeader"] { background: transparent !important; }
 
 /* ── Buttons (primary = orange filled) ──────── */
 button[data-testid="baseButton-primary"],
+button[data-testid="baseButton-primary"]:visited,
+button[data-testid="baseButton-primary"]:active,
+button[data-testid="baseButton-primary"]:focus,
+button[data-testid="baseButton-primary"]:focus-visible,
+button[data-testid="baseButton-primary"]:focus-within,
 .stButton > button:not([kind="secondary"]):not([data-testid="baseButton-secondary"]) {
     background: #FC4C02 !important;
     color: #FFFFFF !important;
+    -webkit-text-fill-color: #FFFFFF !important;
     border: none !important;
     border-radius: 12px !important;
     font-family: 'Inter', sans-serif !important;
     font-weight: 600 !important;
     font-size: 0.92rem !important;
     padding: 0.6rem 1.5rem !important;
-    transition: all 0.18s ease !important;
+    transition: none !important;
     box-shadow: 0 2px 10px rgba(252,76,2,0.22) !important;
     letter-spacing: -0.01em !important;
+    outline: none !important;
+}
+button[data-testid="baseButton-primary"] p,
+button[data-testid="baseButton-primary"] span,
+button[data-testid="baseButton-primary"] div {
+    color: #FFFFFF !important;
+    -webkit-text-fill-color: #FFFFFF !important;
 }
 button[data-testid="baseButton-primary"]:hover,
 .stButton > button:not([kind="secondary"]):not([data-testid="baseButton-secondary"]):hover {
     background: #E03400 !important;
+    color: #FFFFFF !important;
+    -webkit-text-fill-color: #FFFFFF !important;
     box-shadow: 0 4px 18px rgba(252,76,2,0.35) !important;
     transform: translateY(-1px) !important;
 }
 .stButton > button:active { transform: translateY(0) !important; }
 
 /* ── Buttons (secondary = outlined, for inactive tabs) ── */
-button[data-testid="baseButton-secondary"] {
+button[data-testid="baseButton-secondary"],
+button[data-testid="baseButton-secondary"]:visited,
+button[data-testid="baseButton-secondary"]:active,
+button[data-testid="baseButton-secondary"]:focus,
+button[data-testid="baseButton-secondary"]:focus-visible,
+button[data-testid="baseButton-secondary"]:focus-within {
     background: #FFFFFF !important;
     color: #1D1D1F !important;
+    -webkit-text-fill-color: #1D1D1F !important;
     border: 1.5px solid rgba(0,0,0,0.12) !important;
     border-radius: 12px !important;
     font-family: 'Inter', sans-serif !important;
@@ -224,18 +245,22 @@ button[data-testid="baseButton-secondary"] {
     font-size: 0.88rem !important;
     padding: 0.65rem 1rem !important;
     box-shadow: none !important;
-    transition: all 0.18s ease !important;
+    transition: none !important;
     letter-spacing: -0.01em !important;
+    outline: none !important;
+}
+button[data-testid="baseButton-secondary"] p,
+button[data-testid="baseButton-secondary"] span,
+button[data-testid="baseButton-secondary"] div {
+    color: #1D1D1F !important;
+    -webkit-text-fill-color: #1D1D1F !important;
 }
 button[data-testid="baseButton-secondary"]:hover {
     background: #F5F5F7 !important;
     color: #1D1D1F !important;
+    -webkit-text-fill-color: #1D1D1F !important;
     transform: none !important;
     box-shadow: none !important;
-}
-button[data-testid="baseButton-secondary"]:focus {
-    box-shadow: none !important;
-    color: #1D1D1F !important;
 }
 
 /* ── Download Button ────────────────────────── */
@@ -513,7 +538,7 @@ def init_session_state():
         if store.get(pkey) is not None and st.session_state.get(pkey) is None:
             st.session_state[pkey] = store[pkey]
     # Sync athlete settings from persistent store
-    if store.get("athlete_objetivo") and not st.session_state.athlete.get("objetivo"):
+    if store.get("athlete_objetivo") is not None and not st.session_state.athlete.get("objetivo"):
         st.session_state.athlete["objetivo"] = store["athlete_objetivo"]
     if store.get("athlete_dias_descanso") is not None and not st.session_state.athlete.get("dias_descanso"):
         st.session_state.athlete["dias_descanso"] = store["athlete_dias_descanso"]
@@ -1755,6 +1780,8 @@ def main():
         if gerar:
             if not ath.get("nome"):
                 st.warning("Preencha seu perfil em Configurações treino antes de gerar o treino.")
+            elif not ath.get("objetivo", "").strip():
+                st.warning("Preencha o **Objetivo** na aba ⚙️ Config Treino antes de gerar o treino.")
             elif not akey:
                 st.warning("Anthropic API Key não encontrada. Configure via st.secrets no painel do Streamlit Cloud.")
             else:
@@ -2041,8 +2068,7 @@ def main():
             save_athlete_profile(new_ath)
             # Persist athlete settings in cache so they survive session resets
             _store = _get_persistent_store()
-            if obj_v:
-                _store["athlete_objetivo"] = obj_v
+            _store["athlete_objetivo"] = obj_v
             _store["athlete_dias_descanso"] = selecionados_desc
             _store["athlete_dias_fortalecimento"] = selecionados_fort
             _store["athlete_treinos_semana"] = treinos_v
