@@ -466,7 +466,7 @@ def _get_persistent_store():
     """Dict global que persiste enquanto o app estiver rodando no Cloud.
        Sobrevive a reruns, troca de aba, e screen lock do celular.
        Só reseta quando o app dorme completamente (~15min inativo)."""
-    return {"strava_tokens": None, "suggestion": None, "_atl": None, "_ctl": None, "_tsb": None, "athlete_objetivo": None}
+    return {"strava_tokens": None, "suggestion": None, "_atl": None, "_ctl": None, "_tsb": None, "athlete_objetivo": None, "athlete_dias_descanso": None, "athlete_dias_fortalecimento": None, "athlete_treinos_semana": None}
 
 # ══════════════════════════════════════════════
 # SESSION STATE HELPERS (Cloud-adapted)
@@ -485,7 +485,7 @@ def init_session_state():
             "fc_max": 185,
             "fc_repouso": 50,
             "pace_limiar": "06:00",
-            "dias_descanso": [0, 2],
+            "dias_descanso": [],
             "dias_fortalecimento": [],
         },
         "suggestion": None,
@@ -512,9 +512,15 @@ def init_session_state():
     for pkey in ("suggestion", "_atl", "_ctl", "_tsb"):
         if store.get(pkey) is not None and st.session_state.get(pkey) is None:
             st.session_state[pkey] = store[pkey]
-    # Sync athlete objetivo from persistent store
+    # Sync athlete settings from persistent store
     if store.get("athlete_objetivo") and not st.session_state.athlete.get("objetivo"):
         st.session_state.athlete["objetivo"] = store["athlete_objetivo"]
+    if store.get("athlete_dias_descanso") is not None and not st.session_state.athlete.get("dias_descanso"):
+        st.session_state.athlete["dias_descanso"] = store["athlete_dias_descanso"]
+    if store.get("athlete_dias_fortalecimento") is not None and not st.session_state.athlete.get("dias_fortalecimento"):
+        st.session_state.athlete["dias_fortalecimento"] = store["athlete_dias_fortalecimento"]
+    if store.get("athlete_treinos_semana") is not None:
+        st.session_state.athlete["treinos_semana"] = store["athlete_treinos_semana"]
 
 def get_athlete_profile():
     """Retorna perfil do atleta de session_state."""
@@ -793,7 +799,7 @@ def generate(runs, ath, api_key):
     dias_pt = ["Segunda","Terça","Quarta","Quinta","Sexta","Sábado","Domingo"]
     hoje = datetime.now()
     dia  = dias_pt[hoje.weekday()]
-    desc_idx = ath.get("dias_descanso",[0,2])
+    desc_idx = ath.get("dias_descanso",[])
     eh_desc  = hoje.weekday() in desc_idx
     nms_desc = [dias_pt[i] for i in desc_idx]
     dias_tr  = [d for i,d in enumerate(dias_pt) if i not in desc_idx]
@@ -876,7 +882,7 @@ INSTRUÇÕES DE RESPOSTA — siga EXATAMENTE este formato markdown, sem introdu�
 - **Por que este treino:** (justifique com os dados reais de TSB, fadiga e objetivo)
 
 ## 📅 Semana completa
-Distribua os {ath.get('treinos_semana',3)} treinos nos dias disponíveis ({', '.join(dias_tr)}) com descanso em {', '.join(nms_desc)}.{' Dias de fortalecimento de pernas: ' + ', '.join(nms_fort) + '.' if nms_fort else ''} Seja agressivo mas inteligente: alterne intensidade alta / baixa, nunca dois treinos duros seguidos.
+REGRA OBRIGATÓRIA: O atleta deseja fazer EXATAMENTE {ath.get('treinos_semana',3)} treinos de corrida por semana. Distribua esses {ath.get('treinos_semana',3)} treinos nos dias disponíveis ({', '.join(dias_tr)}) com descanso em {', '.join(nms_desc) if nms_desc else 'nenhum dia fixo definido'}.{' Dias de fortalecimento de pernas: ' + ', '.join(nms_fort) + '.' if nms_fort else ''} Os demais dias disponíveis que não tiverem treino de corrida devem ser marcados como "Descanso" ou "Fortalecimento de pernas" conforme configurado. Seja agressivo mas inteligente: alterne intensidade alta / baixa, nunca dois treinos duros seguidos.
 
 IMPORTANTE: Após a descrição textual da semana, inclua OBRIGATORIAMENTE um bloco estruturado parseável com EXATAMENTE este formato (uma linha por dia, começando com a abreviação do dia seguida de dois-pontos). Use | como separador de campos. Para dias de descanso escreva apenas "Descanso". Para dias de fortalecimento escreva apenas "Fortalecimento de pernas":
 
@@ -1504,20 +1510,35 @@ def compute_weekly_km(runs):
 
 
 def render_weekly_km_chart(weekly_data):
-    """Renders weekly km using native Streamlit bar_chart for reliability."""
+    """Renders weekly km as a styled HTML bar chart matching the app design system."""
     if not weekly_data:
         st.info("Dados insuficientes para o gráfico semanal.")
         return
-    import pandas as pd
-    df = pd.DataFrame(weekly_data)
-    df = df.rename(columns={"week_label": "Semana", "km": "km"})
-    df = df.set_index("Semana")
+    max_km = max((w["km"] for w in weekly_data), default=1) or 1
+
+    bars_html = ""
+    for w in weekly_data:
+        pct = (w["km"] / max_km) * 100 if max_km > 0 else 0
+        km_label = f'{w["km"]:.1f}' if w["km"] > 0 else "0"
+        bar_color = "#3A3A3C" if w["km"] > 0 else "#E5E5EA"
+        bars_html += f'''
+        <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:0.3rem">
+            <span style="font-size:0.72rem;font-weight:600;color:#1D1D1F">{km_label}</span>
+            <div style="width:100%;height:120px;display:flex;align-items:flex-end;justify-content:center">
+                <div style="width:70%;min-height:4px;height:{max(pct, 3):.0f}%;
+                    background:{bar_color};border-radius:6px 6px 2px 2px;
+                    transition:height 0.3s ease"></div>
+            </div>
+            <span style="font-size:0.68rem;color:#6E6E73;text-align:center;line-height:1.2">{w["week_label"]}</span>
+        </div>'''
+
     st.markdown(
-        '<p style="font-size:0.72rem;font-weight:600;text-transform:uppercase;'
-        'letter-spacing:0.06em;color:#6E6E73;margin-bottom:0.5rem">'
-        'Volume semanal (km)</p>',
+        f'<p style="font-size:0.72rem;font-weight:600;text-transform:uppercase;'
+        f'letter-spacing:0.06em;color:#6E6E73;margin-bottom:0.8rem">'
+        f'Volume semanal (km)</p>'
+        f'<div style="display:flex;gap:0.5rem;align-items:flex-end;padding:0 0.2rem">'
+        f'{bars_html}</div>',
         unsafe_allow_html=True)
-    st.bar_chart(df, color="#3A3A3C", height=220)
 
 
 # ══════════════════════════════════════════════
@@ -1664,7 +1685,7 @@ def main():
         # ── Rest day indicator + Generate button (só se conectado) ──
         gerar = False
         if not needs_setup and not needs_connect:
-            desc_idx = ath.get("dias_descanso", [0, 2])
+            desc_idx = ath.get("dias_descanso", [])
             dias_pt  = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
             hoje_idx = datetime.now().weekday()
             hoje_nome = dias_pt[hoje_idx]
@@ -1940,7 +1961,7 @@ def main():
         # Dias de descanso
         st.markdown('<div class="form-section">', unsafe_allow_html=True)
         st.markdown('<span class="form-label">Dias de Descanso Fixos</span>', unsafe_allow_html=True)
-        desc_cfg = ath.get("dias_descanso", [0, 2])
+        desc_cfg = ath.get("dias_descanso", [])
         cols_dias = st.columns(7)
         selecionados_desc = []
         for i, (col, dia) in enumerate(zip(cols_dias, DIAS_SEMANA)):
@@ -1972,10 +1993,13 @@ def main():
                 "dias_fortalecimento": selecionados_fort,
             }
             save_athlete_profile(new_ath)
-            # Persist objetivo in cache so it survives session resets
+            # Persist athlete settings in cache so they survive session resets
+            _store = _get_persistent_store()
             if obj_v:
-                _store = _get_persistent_store()
                 _store["athlete_objetivo"] = obj_v
+            _store["athlete_dias_descanso"] = selecionados_desc
+            _store["athlete_dias_fortalecimento"] = selecionados_fort
+            _store["athlete_treinos_semana"] = treinos_v
             st.success("Configurações de treino salvas na sessão.")
 
     # ══════════════════════════════════════════
