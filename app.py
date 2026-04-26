@@ -190,8 +190,9 @@ header[data-testid="stHeader"] { background: transparent !important; }
     line-height: 1.6;
 }
 
-/* ── Buttons ────────────────────────────────── */
-.stButton > button {
+/* ── Buttons (primary = orange filled) ──────── */
+button[data-testid="baseButton-primary"],
+.stButton > button:not([kind="secondary"]):not([data-testid="baseButton-secondary"]) {
     background: #FC4C02 !important;
     color: #FFFFFF !important;
     border: none !important;
@@ -204,12 +205,38 @@ header[data-testid="stHeader"] { background: transparent !important; }
     box-shadow: 0 2px 10px rgba(252,76,2,0.22) !important;
     letter-spacing: -0.01em !important;
 }
-.stButton > button:hover {
+button[data-testid="baseButton-primary"]:hover,
+.stButton > button:not([kind="secondary"]):not([data-testid="baseButton-secondary"]):hover {
     background: #E03400 !important;
     box-shadow: 0 4px 18px rgba(252,76,2,0.35) !important;
     transform: translateY(-1px) !important;
 }
 .stButton > button:active { transform: translateY(0) !important; }
+
+/* ── Buttons (secondary = outlined, for inactive tabs) ── */
+button[data-testid="baseButton-secondary"] {
+    background: #FFFFFF !important;
+    color: #1D1D1F !important;
+    border: 1.5px solid rgba(0,0,0,0.12) !important;
+    border-radius: 12px !important;
+    font-family: 'Inter', sans-serif !important;
+    font-weight: 600 !important;
+    font-size: 0.88rem !important;
+    padding: 0.65rem 1rem !important;
+    box-shadow: none !important;
+    transition: all 0.18s ease !important;
+    letter-spacing: -0.01em !important;
+}
+button[data-testid="baseButton-secondary"]:hover {
+    background: #F5F5F7 !important;
+    color: #1D1D1F !important;
+    transform: none !important;
+    box-shadow: none !important;
+}
+button[data-testid="baseButton-secondary"]:focus {
+    box-shadow: none !important;
+    color: #1D1D1F !important;
+}
 
 /* ── Download Button ────────────────────────── */
 .stDownloadButton > button {
@@ -277,36 +304,8 @@ header[data-testid="stHeader"] { background: transparent !important; }
 }
 .stSlider > div { padding: 0 0.2rem; }
 
-/* ── Tabs (grid 2×2 para caber no mobile) ──── */
-.stTabs [data-baseweb="tab-list"] {
-    background: transparent !important;
-    gap: 4px !important;
-    flex-wrap: wrap !important;
-    border-bottom: 1.5px solid rgba(0,0,0,0.08) !important;
-    padding-bottom: 0 !important;
-    margin-bottom: 1.5rem !important;
-}
-.stTabs [data-baseweb="tab"] {
-    background: transparent !important;
-    color: #6E6E73 !important;
-    flex: 1 1 calc(50% - 4px) !important;
-    min-width: calc(50% - 4px) !important;
-    max-width: calc(50% - 2px) !important;
-    justify-content: center !important;
-    font-family: 'Inter', sans-serif !important;
-    font-weight: 500 !important;
-    font-size: 0.9rem !important;
-    padding: 0.65rem 1.1rem !important;
-    border-radius: 0 !important;
-    border-bottom: 2px solid transparent !important;
-    margin-bottom: -1.5px !important;
-}
-.stTabs [aria-selected="true"] {
-    color: #1D1D1F !important;
-    font-weight: 700 !important;
-    border-bottom: 2px solid #FC4C02 !important;
-}
-.stTabs [data-baseweb="tab-panel"] { padding: 0 !important; }
+/* ── Tab button grid spacing ──────────────── */
+.tab-grid-row { margin-bottom: 0.35rem; }
 
 /* ── Expander ───────────────────────────────── */
 .streamlit-expanderHeader,
@@ -467,7 +466,7 @@ def _get_persistent_store():
     """Dict global que persiste enquanto o app estiver rodando no Cloud.
        Sobrevive a reruns, troca de aba, e screen lock do celular.
        Só reseta quando o app dorme completamente (~15min inativo)."""
-    return {"strava_tokens": None}
+    return {"strava_tokens": None, "suggestion": None, "_atl": None, "_ctl": None, "_tsb": None}
 
 # ══════════════════════════════════════════════
 # SESSION STATE HELPERS (Cloud-adapted)
@@ -493,6 +492,7 @@ def init_session_state():
         "_atl": None,
         "_ctl": None,
         "_tsb": None,
+        "active_tab": 0,
         # Credenciais via st.secrets (configuradas no painel do Streamlit Cloud)
         "client_id": _get_secret("client_id", ""),
         "client_secret": _get_secret("client_secret", ""),
@@ -506,6 +506,12 @@ def init_session_state():
     # Ensure dias_fortalecimento exists in athlete profile (migration)
     if "dias_fortalecimento" not in st.session_state.athlete:
         st.session_state.athlete["dias_fortalecimento"] = []
+
+    # Sync training cache from persistent store (survives screen lock / tab switch)
+    store = _get_persistent_store()
+    for pkey in ("suggestion", "_atl", "_ctl", "_tsb"):
+        if store.get(pkey) is not None and st.session_state.get(pkey) is None:
+            st.session_state[pkey] = store[pkey]
 
 def get_athlete_profile():
     """Retorna perfil do atleta de session_state."""
@@ -1117,6 +1123,54 @@ def make_pdf(suggestion, ath, runs, atl, ctl, tsb):
     story.append(act_tbl)
     story.append(Spacer(1, 4*mm))
 
+    # ── Plano Semanal Detalhado ─────────────────────────────
+    plan = parse_weekly_plan(suggestion)
+    if plan:
+        story.append(sec("Plano Semanal Detalhado"))
+        plan_col_w = [25*mm, 30*mm, 20*mm, 25*mm, CONTENT_W - 100*mm]
+        plan_hdr = [Paragraph(h, S["th"]) for h in
+                    ["DIA", "TIPO", "DIST.", "PACE", "DESCRIÇÃO"]]
+        plan_rows = [plan_hdr]
+        for entry in plan:
+            tipo_txt = entry.get("tipo", "")
+            if entry.get("is_rest"):
+                tipo_color = GREY
+            elif entry.get("is_strength"):
+                tipo_color = colors.HexColor("#007AFF")
+            else:
+                tipo_color = ORANGE
+            desc_text = entry.get("descricao", "")
+            # Truncate very long descriptions for PDF
+            if len(desc_text) > 120:
+                desc_text = desc_text[:117] + "..."
+            plan_rows.append([
+                Paragraph(entry.get("dia_nome", ""), S["td"]),
+                Paragraph(f'<font color="#{tipo_color.hexval()[2:]}">{tipo_txt}</font>',
+                          S["td"]),
+                Paragraph(entry.get("distancia", "—") or "—", S["td_c"]),
+                Paragraph(entry.get("pace", "—") or "—", S["td_c"]),
+                Paragraph(desc_text or "—", S["td"]),
+            ])
+        plan_tbl = Table(plan_rows, colWidths=plan_col_w, repeatRows=1)
+        plan_tbl.setStyle(TableStyle([
+            ("BACKGROUND",     (0,0), (-1,0),  DARK),
+            ("TEXTCOLOR",      (0,0), (-1,0),  WHITE),
+            ("ALIGN",          (0,0), (-1,0),  "CENTER"),
+            ("TOPPADDING",     (0,0), (-1,0),  5),
+            ("BOTTOMPADDING",  (0,0), (-1,0),  5),
+            ("ROWBACKGROUNDS", (0,1), (-1,-1), [WHITE, LIGHT]),
+            ("LINEBELOW",      (0,0), (-1,-1), 0.3, DIVIDER),
+            ("BOX",            (0,0), (-1,-1), 0.5, DIVIDER),
+            ("TOPPADDING",     (0,1), (-1,-1), 4),
+            ("BOTTOMPADDING",  (0,1), (-1,-1), 4),
+            ("LEFTPADDING",    (0,0), (-1,-1), 5),
+            ("RIGHTPADDING",   (0,0), (-1,-1), 5),
+            ("VALIGN",         (0,0), (-1,-1), "MIDDLE"),
+            ("FONTSIZE",       (0,0), (-1,-1), 8.5),
+        ]))
+        story.append(plan_tbl)
+        story.append(Spacer(1, 4*mm))
+
     # ── Análise da IA ─────────────────────────────────────
     strip = lambda t: "".join(c for c in t if ord(c) < 0x2500)
     for line in suggestion.splitlines():
@@ -1267,15 +1321,51 @@ def render_day_card(entry):
             <p style="margin:0.4rem 0 0;color:#3A3A3C;font-size:0.85rem">Fortalecimento de pernas</p>
         </div>"""
     else:
-        dist_html = f'<span style="font-size:0.82rem;color:#6E6E73;margin-right:0.8rem">{entry["distancia"]}</span>' if entry["distancia"] else ""
-        pace_html = f'<span style="font-size:0.82rem;color:#6E6E73">{entry["pace"]}</span>' if entry["pace"] else ""
+        # Build metric chips for distance and pace
+        chips_html = ""
+        if entry["distancia"]:
+            chips_html += (
+                f'<span style="display:inline-block;font-size:0.78rem;font-weight:600;'
+                f'color:#FC4C02;background:rgba(252,76,2,0.08);padding:0.2rem 0.55rem;'
+                f'border-radius:8px;margin-right:0.4rem">{entry["distancia"]}</span>'
+            )
+        if entry["pace"]:
+            chips_html += (
+                f'<span style="display:inline-block;font-size:0.78rem;font-weight:600;'
+                f'color:#6E6E73;background:#F5F5F7;padding:0.2rem 0.55rem;'
+                f'border-radius:8px">{entry["pace"]}</span>'
+            )
+        # Parse description for segment breakdown (e.g. "3km aquecimento + 5km ritmo forte + 2km desaquecimento")
+        desc = entry.get("descricao", "")
+        desc_html = ""
+        if desc:
+            # Try to split on "+" to show structured segments
+            segments = [s.strip() for s in desc.split("+") if s.strip()]
+            if len(segments) > 1:
+                seg_items = ""
+                for seg in segments:
+                    seg_items += (
+                        f'<div style="display:flex;align-items:center;gap:0.4rem;'
+                        f'padding:0.25rem 0;border-bottom:1px solid rgba(0,0,0,0.04)">'
+                        f'<span style="color:#FC4C02;font-size:0.75rem">●</span>'
+                        f'<span style="font-size:0.83rem;color:#3A3A3C">{seg}</span></div>'
+                    )
+                desc_html = (
+                    f'<div style="margin-top:0.5rem;padding:0.5rem 0.6rem;'
+                    f'background:#FAFAFA;border-radius:8px;border:1px solid rgba(0,0,0,0.04)">'
+                    f'<span style="font-size:0.7rem;font-weight:600;text-transform:uppercase;'
+                    f'letter-spacing:0.05em;color:#AEAEB2;margin-bottom:0.25rem;display:block">Estrutura</span>'
+                    f'{seg_items}</div>'
+                )
+            else:
+                desc_html = f'<p style="margin:0.4rem 0 0;color:#3A3A3C;font-size:0.85rem;line-height:1.5">{desc}</p>'
         return f"""<div class="day-card">
             <div style="display:flex;justify-content:space-between;align-items:center">
                 <span style="font-weight:700;color:#1D1D1F;font-size:0.95rem">{dia}</span>
                 <span style="font-size:0.78rem;font-weight:600;color:#FC4C02;text-transform:uppercase;letter-spacing:0.05em">{entry['tipo']}</span>
             </div>
-            <div style="margin-top:0.35rem">{dist_html}{pace_html}</div>
-            <p style="margin:0.4rem 0 0;color:#3A3A3C;font-size:0.85rem;line-height:1.5">{entry.get('descricao','')}</p>
+            <div style="margin-top:0.4rem">{chips_html}</div>
+            {desc_html}
         </div>"""
 
 
@@ -1290,28 +1380,28 @@ def render_weekly_cards(plan):
 
 
 def compute_weekly_km(runs):
-    """Groups activities by ISO week and returns a list of dicts for the last 4 weeks.
+    """Always returns exactly 4 weeks (current week + 3 prior), filling 0 for weeks with no activity.
     Each dict: {"week_label": "13/04 - 19/04", "km": 42.5}
     """
     run_only = [r for r in runs if not r.get("_is_walk")]
-    if not run_only:
-        return []
+    # Build km totals by ISO week key
     week_data = {}
     for r in run_only:
         dt = datetime.fromisoformat(r["start_date"].replace("Z", "+00:00"))
         iso_year, iso_week, _ = dt.isocalendar()
         key = (iso_year, iso_week)
         week_data[key] = week_data.get(key, 0) + r["distance"] / 1000
-    # Sort by (year, week)
-    sorted_weeks = sorted(week_data.keys())
-    last_4 = sorted_weeks[-4:] if len(sorted_weeks) >= 4 else sorted_weeks
+    # Always generate exactly 4 weeks: current week and 3 prior
+    today = datetime.now()
     result = []
-    for year, wk in last_4:
-        # Compute Monday and Sunday of that ISO week
-        monday = datetime.strptime(f"{year}-W{wk:02d}-1", "%G-W%V-%u")
+    for weeks_ago in range(3, -1, -1):
+        ref_day = today - timedelta(weeks=weeks_ago)
+        iso_year, iso_week, _ = ref_day.isocalendar()
+        key = (iso_year, iso_week)
+        monday = datetime.strptime(f"{iso_year}-W{iso_week:02d}-1", "%G-W%V-%u")
         sunday = monday + timedelta(days=6)
         label = f"{monday.strftime('%d/%m')} - {sunday.strftime('%d/%m')}"
-        result.append({"week_label": label, "km": round(week_data[(year, wk)], 1)})
+        result.append({"week_label": label, "km": round(week_data.get(key, 0), 1)})
     return result
 
 
@@ -1329,7 +1419,7 @@ def render_weekly_km_chart(weekly_data):
         'letter-spacing:0.06em;color:#6E6E73;margin-bottom:0.5rem">'
         'Volume semanal (km)</p>',
         unsafe_allow_html=True)
-    st.bar_chart(df, color="#FC4C02", height=220)
+    st.bar_chart(df, color="#3A3A3C", height=220)
 
 
 # ══════════════════════════════════════════════
@@ -1383,18 +1473,34 @@ def main():
     needs_setup = not all([cid, cs, akey])
     needs_connect = not connected
 
-    # ── Tabs (sempre visíveis) ─────────────────
-    tab_treinos, tab_resumo, tab_config_treino, tab_config_app = st.tabs([
-        "🏃 Treinos",
-        "📊 Resumo 30d",
-        "⚙️ Config Treino",
-        "🔧 Config App",
-    ])
+    # ── Tab navigation (custom button grid 2×2) ──
+    TAB_LABELS = ["🏃 Treinos", "📊 Resumo 30d", "⚙️ Config Treino", "🔧 Config App"]
+    r1c1, r1c2 = st.columns(2)
+    with r1c1:
+        _typ = "primary" if st.session_state.active_tab == 0 else "secondary"
+        if st.button(TAB_LABELS[0], key="tab_0", use_container_width=True, type=_typ):
+            st.session_state.active_tab = 0; st.rerun()
+    with r1c2:
+        _typ = "primary" if st.session_state.active_tab == 1 else "secondary"
+        if st.button(TAB_LABELS[1], key="tab_1", use_container_width=True, type=_typ):
+            st.session_state.active_tab = 1; st.rerun()
+    r2c1, r2c2 = st.columns(2)
+    with r2c1:
+        _typ = "primary" if st.session_state.active_tab == 2 else "secondary"
+        if st.button(TAB_LABELS[2], key="tab_2", use_container_width=True, type=_typ):
+            st.session_state.active_tab = 2; st.rerun()
+    with r2c2:
+        _typ = "primary" if st.session_state.active_tab == 3 else "secondary"
+        if st.button(TAB_LABELS[3], key="tab_3", use_container_width=True, type=_typ):
+            st.session_state.active_tab = 3; st.rerun()
+
+    st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+    active_tab = st.session_state.active_tab
 
     # ══════════════════════════════════════════
     # TAB 1: TREINOS DA SEMANA
     # ══════════════════════════════════════════
-    with tab_treinos:
+    if active_tab == 0:
 
         if needs_setup or needs_connect:
             st.markdown(f"""<div class="card" style="text-align:center;padding:3rem 2rem">
@@ -1519,6 +1625,9 @@ def main():
 
                         st.session_state.update({"suggestion": sug,
                                                  "_atl": a, "_ctl": c, "_tsb": t})
+                        # Persist training cache (survives screen lock / tab switch)
+                        _store = _get_persistent_store()
+                        _store.update({"suggestion": sug, "_atl": a, "_ctl": c, "_tsb": t})
                         progress_bar.progress(100)
                         _t.sleep(0.3)
                         st.rerun()
@@ -1531,7 +1640,7 @@ def main():
     # ══════════════════════════════════════════
     # TAB 2: RESUMO ÚLTIMOS 30 DIAS
     # ══════════════════════════════════════════
-    with tab_resumo:
+    if active_tab == 1:
 
         if needs_setup or needs_connect:
             st.markdown(f"""<div class="card" style="text-align:center;padding:3rem 2rem">
@@ -1654,7 +1763,7 @@ def main():
     # ══════════════════════════════════════════
     # TAB 3: CONFIGURAÇÕES TREINO
     # ══════════════════════════════════════════
-    with tab_config_treino:
+    if active_tab == 2:
 
         st.markdown('<div class="form-section">', unsafe_allow_html=True)
         st.markdown('<span class="form-label">Perfil do Atleta</span>', unsafe_allow_html=True)
@@ -1733,7 +1842,7 @@ def main():
     # ══════════════════════════════════════════
     # TAB 4: CONFIGURAÇÕES APP
     # ══════════════════════════════════════════
-    with tab_config_app:
+    if active_tab == 3:
 
         # Credenciais (editáveis — salvas em session_state)
         st.markdown('<div class="form-section">', unsafe_allow_html=True)
