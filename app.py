@@ -466,7 +466,7 @@ def _get_persistent_store():
     """Dict global que persiste enquanto o app estiver rodando no Cloud.
        Sobrevive a reruns, troca de aba, e screen lock do celular.
        Só reseta quando o app dorme completamente (~15min inativo)."""
-    return {"strava_tokens": None, "suggestion": None, "_atl": None, "_ctl": None, "_tsb": None}
+    return {"strava_tokens": None, "suggestion": None, "_atl": None, "_ctl": None, "_tsb": None, "athlete_objetivo": None}
 
 # ══════════════════════════════════════════════
 # SESSION STATE HELPERS (Cloud-adapted)
@@ -480,7 +480,7 @@ def init_session_state():
         "athlete": {
             "nome": "Nikola",
             "nivel": "intermediário",
-            "objetivo": "Completar meia maratona em 30 dias",
+            "objetivo": "",
             "treinos_semana": 3,
             "fc_max": 185,
             "fc_repouso": 50,
@@ -512,6 +512,9 @@ def init_session_state():
     for pkey in ("suggestion", "_atl", "_ctl", "_tsb"):
         if store.get(pkey) is not None and st.session_state.get(pkey) is None:
             st.session_state[pkey] = store[pkey]
+    # Sync athlete objetivo from persistent store
+    if store.get("athlete_objetivo") and not st.session_state.athlete.get("objetivo"):
+        st.session_state.athlete["objetivo"] = store["athlete_objetivo"]
 
 def get_athlete_profile():
     """Retorna perfil do atleta de session_state."""
@@ -1203,14 +1206,32 @@ def metric_card(label, value, sub=None, badge=None, badge_cls="badge-green"):
         {sub_html}{bdg_html}
     </div>"""
 
-def render_results(suggestion):
-    """Renderiza cada seção da sugestão num card separado."""
+def render_results(suggestion, skip_sections=None):
+    """Renderiza cada seção da sugestão num card separado.
+    skip_sections: set of section header keywords to skip entirely.
+    For 'Semana completa', only show text before the ``` code block."""
+    skip_sections = skip_sections or set()
     sections = re.split(r'\n(?=## )', suggestion.strip())
-    for sec in sections:
-        lines = sec.strip().splitlines()
+    for sec_text in sections:
+        lines = sec_text.strip().splitlines()
         if not lines: continue
         header = lines[0].replace("## ", "").strip()
+
+        # Skip sections that are already rendered elsewhere
+        if any(skip in header for skip in skip_sections):
+            continue
+
         body_lines = lines[1:]
+
+        # For "Semana completa" — only keep text before the ``` code block
+        if "Semana completa" in header or "semana completa" in header.lower():
+            filtered = []
+            for ln in body_lines:
+                if ln.strip().startswith("```"):
+                    break
+                filtered.append(ln)
+            body_lines = filtered
+
         # Converter markdown simples para HTML
         body_html = ""
         for ln in body_lines:
@@ -1223,8 +1244,11 @@ def render_results(suggestion):
             else:
                 body_html += f'<p style="margin:0 0 0.4rem;color:#3A3A3C;font-size:0.9rem;line-height:1.65">{ln}</p>'
 
-        if any(ln.startswith("- ") for ln in body_lines):
+        if any(ln.strip().startswith("- ") for ln in body_lines):
             body_html = f'<ul style="padding-left:1.2rem;margin:0">{body_html}</ul>'
+
+        if not body_html.strip() or body_html.strip() == "<br>":
+            continue
 
         st.markdown(f"""<div class="result-section">
             <h2>{header}</h2>
@@ -1369,14 +1393,88 @@ def render_day_card(entry):
         </div>"""
 
 
-def render_weekly_cards(plan):
-    """Renders the full weekly plan as day cards in a 2-column grid."""
+def extract_day_detail_from_suggestion(suggestion, day_abbrev):
+    """Extracts detailed AI text for a specific day from the full suggestion.
+    Looks for content in the '## 🏃 Treino de hoje' section if it matches,
+    or content between day mentions in the '## 📅 Semana completa' section."""
+    if not suggestion:
+        return None
+    # Try to find dedicated detail in the Semana completa prose (before ``` block)
+    sections = re.split(r'\n(?=## )', suggestion.strip())
+    for sec in sections:
+        if "Semana completa" in sec or "semana completa" in sec.lower():
+            # Get text before ``` block
+            prose_lines = []
+            for line in sec.splitlines()[1:]:  # skip header
+                if line.strip().startswith("```"):
+                    break
+                prose_lines.append(line)
+            return "\n".join(prose_lines).strip() if prose_lines else None
+    return None
+
+
+def render_weekly_cards(plan, suggestion=None):
+    """Renders the full weekly plan as day cards in a 2-column grid.
+    Cards are clickable expanders showing detailed info."""
     if not plan:
         return
+
+    # Extract the "Treino de hoje" detail section from AI response
+    hoje_detail = None
+    if suggestion:
+        sections = re.split(r'\n(?=## )', suggestion.strip())
+        for sec in sections:
+            if "Treino de hoje" in sec:
+                lines = sec.strip().splitlines()[1:]  # skip header
+                hoje_detail = "\n".join(lines).strip()
+                break
+
+    dias_pt = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
+    hoje_idx = datetime.now().weekday()
+    hoje_nome = dias_pt[hoje_idx] if hoje_idx < len(dias_pt) else ""
+
     col1, col2 = st.columns(2)
     for i, entry in enumerate(plan):
         with col1 if i % 2 == 0 else col2:
+            # Render the card visually
             st.markdown(render_day_card(entry), unsafe_allow_html=True)
+            # Add clickable detail expander for non-rest days
+            if not entry["is_rest"]:
+                is_today = (entry["dia_nome"] == hoje_nome)
+                with st.expander("Ver detalhes" + (" · hoje" if is_today else ""), expanded=False):
+                    if is_today and hoje_detail:
+                        # Show the full "Treino de hoje" AI detail
+                        detail_html = ""
+                        for ln in hoje_detail.splitlines():
+                            ln = ln.strip()
+                            if not ln: continue
+                            ln = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', ln)
+                            if ln.startswith("- "):
+                                detail_html += f'<li style="margin-bottom:0.35rem;color:#3A3A3C;font-size:0.85rem">{ln[2:]}</li>'
+                            else:
+                                detail_html += f'<p style="margin:0 0 0.35rem;color:#3A3A3C;font-size:0.85rem;line-height:1.55">{ln}</p>'
+                        if any(ln.strip().startswith("- ") for ln in hoje_detail.splitlines()):
+                            detail_html = f'<ul style="padding-left:1rem;margin:0">{detail_html}</ul>'
+                        st.markdown(detail_html, unsafe_allow_html=True)
+                    else:
+                        # Build detail from entry data
+                        detail_parts = []
+                        if entry.get("tipo"):
+                            detail_parts.append(f'<p style="margin:0 0 0.3rem"><strong style="color:#FC4C02">Tipo:</strong> <span style="color:#3A3A3C;font-size:0.88rem">{entry["tipo"]}</span></p>')
+                        if entry.get("distancia"):
+                            detail_parts.append(f'<p style="margin:0 0 0.3rem"><strong style="color:#FC4C02">Distância:</strong> <span style="color:#3A3A3C;font-size:0.88rem">{entry["distancia"]}</span></p>')
+                        if entry.get("pace"):
+                            detail_parts.append(f'<p style="margin:0 0 0.3rem"><strong style="color:#FC4C02">Pace alvo:</strong> <span style="color:#3A3A3C;font-size:0.88rem">{entry["pace"]}</span></p>')
+                        if entry.get("descricao"):
+                            desc = entry["descricao"]
+                            segments = [s.strip() for s in desc.split("+") if s.strip()]
+                            if len(segments) > 1:
+                                detail_parts.append('<p style="margin:0.4rem 0 0.2rem"><strong style="color:#FC4C02">Estrutura detalhada:</strong></p>')
+                                for seg in segments:
+                                    detail_parts.append(f'<p style="margin:0 0 0.2rem;padding-left:0.8rem;color:#3A3A3C;font-size:0.85rem">▸ {seg}</p>')
+                            else:
+                                detail_parts.append(f'<p style="margin:0.3rem 0 0"><strong style="color:#FC4C02">Descrição:</strong> <span style="color:#3A3A3C;font-size:0.88rem">{desc}</span></p>')
+                        st.markdown("".join(detail_parts), unsafe_allow_html=True)
 
 
 def compute_weekly_km(runs):
@@ -1518,12 +1616,12 @@ def main():
             if plan:
                 st.markdown('<p class="section-title" style="margin-bottom:1rem">Plano da semana</p>',
                             unsafe_allow_html=True)
-                render_weekly_cards(plan)
+                render_weekly_cards(plan, suggestion=st.session_state.suggestion)
                 st.markdown("<div style='height:0.8rem'></div>", unsafe_allow_html=True)
 
-            # Full AI analysis
+            # Full AI analysis (skip "Treino de hoje" — it's shown in the day card detail)
             st.markdown("<hr>", unsafe_allow_html=True)
-            render_results(st.session_state.suggestion)
+            render_results(st.session_state.suggestion, skip_sections={"Treino de hoje"})
 
             # PDF download
             st.markdown("<div style='height:0.3rem'></div>", unsafe_allow_html=True)
@@ -1591,7 +1689,7 @@ def main():
             if not ath.get("nome"):
                 st.warning("Preencha seu perfil em Configurações treino antes de gerar o treino.")
             elif not akey:
-                st.warning("Configure sua Anthropic API Key em Configurações app.")
+                st.warning("Anthropic API Key não encontrada. Configure via st.secrets no painel do Streamlit Cloud.")
             else:
                 progress_box = st.empty()
                 progress_bar = st.progress(0)
@@ -1688,75 +1786,112 @@ def main():
                     doff     = days_off(runs)
                     doff_txt = (f"Ativo {'' if doff == 0 else f'há {doff}d'}" if doff is not None else "—")
 
-                    # ── Bento Grid de métricas ─────────────
-                    c1, c2, c3, c4 = st.columns(4)
-                    with c1:
+                    # ── Bento Grid de métricas (2×2 on mobile) ──
+                    row1_c1, row1_c2 = st.columns(2)
+                    with row1_c1:
                         st.markdown(metric_card("Volume 28 dias", f"{total_km:.1f}", "km",
-                                                f"{len(run_only)} corridas" + (f" · {len(walk_only)} caminhadas" if walk_only else ""),
+                                                f"{len(run_only)} corridas" + (f" · {len(walk_only)} cam." if walk_only else ""),
                                                 "badge-orange"),
                                     unsafe_allow_html=True)
-                    with c2:
+                    with row1_c2:
                         st.markdown(metric_card("Pace médio", avg_pace, sub=trend or ""),
                                     unsafe_allow_html=True)
-                    with c3:
+                    st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+                    row2_c1, row2_c2 = st.columns(2)
+                    with row2_c1:
                         st.markdown(metric_card("ATL / CTL", f"{atl} / {ctl}",
                                                 sub="fadiga / condicionamento"),
                                     unsafe_allow_html=True)
-                    with c4:
+                    with row2_c2:
                         st.markdown(metric_card("Forma (TSB)", f"{tsb:+.1f}",
                                                 sub=doff_txt, badge=tsb_txt, badge_cls=tsb_cls),
                                     unsafe_allow_html=True)
 
-                    st.markdown("<div style='height:0.8rem'></div>", unsafe_allow_html=True)
+                    st.markdown("<div style='height:1.2rem'></div>", unsafe_allow_html=True)
 
-                    # ── Weekly km bar chart ────────────────
+                    # ── Weekly km bar chart (in a card) ────
                     weekly_data = compute_weekly_km(runs)
+                    st.markdown(
+                        '<div class="card" style="padding:1.2rem 1.4rem">', unsafe_allow_html=True)
                     render_weekly_km_chart(weekly_data)
+                    st.markdown('</div>', unsafe_allow_html=True)
 
-                    st.markdown("<div style='height:0.8rem'></div>", unsafe_allow_html=True)
+                    st.markdown("<div style='height:1.2rem'></div>", unsafe_allow_html=True)
 
-                    # ── Activity detail table in expander ──
+                    # ── TSB status card ──
+                    tsb_color = "#34C759" if tsb >= 0 else ("#FF9500" if tsb >= -10 else "#FF3B30")
+                    tsb_icon = "✅" if tsb >= 0 else ("⚠️" if tsb >= -10 else "🔴")
+                    st.markdown(
+                        f'<div class="card" style="padding:1rem 1.4rem;'
+                        f'border-left:4px solid {tsb_color}">'
+                        f'<div style="display:flex;align-items:center;gap:0.6rem">'
+                        f'<span style="font-size:1.2rem">{tsb_icon}</span>'
+                        f'<div>'
+                        f'<span style="font-size:0.7rem;font-weight:600;text-transform:uppercase;'
+                        f'letter-spacing:0.06em;color:#6E6E73;display:block">Estado atual</span>'
+                        f'<span style="font-size:1rem;font-weight:700;color:#1D1D1F">{tsb_txt}</span>'
+                        f'<span style="font-size:0.82rem;color:#6E6E73;margin-left:0.5rem">'
+                        f'TSB {tsb:+.1f} · {doff_txt}</span>'
+                        f'</div></div></div>',
+                        unsafe_allow_html=True)
+
+                    st.markdown("<div style='height:1.2rem'></div>", unsafe_allow_html=True)
+
+                    # ── Activity cards ──
                     lbl_count = f"{len(run_only)} corridas" + (f" + {len(walk_only)} caminhadas" if walk_only else "")
-                    with st.expander(f"  📋  Atividades recentes  ({lbl_count})", expanded=False):
-                        rows_html = ""
-                        headers = ["Data", "Tipo", "Nome", "Distância", "Duração", "Pace", "FC", "Carga"]
-                        head_cells = "".join(
-                            f'<th style="padding:9px 12px;background:#1D1D1F !important;'
-                            f'color:#FFFFFF !important;-webkit-text-fill-color:#FFFFFF !important;'
-                            f'font-size:0.74rem;font-weight:600;text-align:left;'
-                            f'white-space:nowrap;letter-spacing:0.04em">{h}</th>'
-                            for h in headers
-                        )
-                        for i, r in enumerate(runs):
-                            is_w = r.get("_is_walk", False)
-                            bg   = "#FFFFFF" if i % 2 == 0 else "#F5F5F7"
-                            tipo_color = "#1A8A3A" if is_w else "#FC4C02"
-                            tipo_txt   = "🚶 Caminhada" if is_w else "🏃 Corrida"
-                            vals = [
-                                r["start_date"][:10],
-                                f'<span style="color:{tipo_color};font-weight:600;font-size:0.82rem">{tipo_txt}</span>',
-                                r.get("name", ""),
-                                fmt_dist(r["distance"]),
-                                fmt_dur(r.get("moving_time", 0)),
-                                fmt_pace(r.get("average_speed")),
-                                f'{round(r["average_heartrate"])} bpm' if r.get("average_heartrate") else "—",
-                                f'{run_load(r, ath):.0f}' + (" ♻️" if is_w else ""),
-                            ]
-                            cells = "".join(
-                                f'<td style="padding:8px 12px;color:#1D1D1F;font-size:0.84rem;'
-                                f'border-bottom:1px solid #E5E5EA;white-space:nowrap">{v}</td>'
-                                for v in vals
-                            )
-                            rows_html += f'<tr style="background:{bg}">{cells}</tr>'
+                    st.markdown(
+                        f'<p class="section-title">Atividades recentes  ·  {lbl_count}</p>',
+                        unsafe_allow_html=True)
+
+                    for i, r in enumerate(runs[:10]):
+                        is_w = r.get("_is_walk", False)
+                        tipo_color = "#1A8A3A" if is_w else "#FC4C02"
+                        tipo_txt = "Caminhada" if is_w else "Corrida"
+                        tipo_icon = "🚶" if is_w else "🏃"
+                        dt_str = r["start_date"][:10]
+                        try:
+                            dt_obj = datetime.strptime(dt_str, "%Y-%m-%d")
+                            dt_display = dt_obj.strftime("%d/%m")
+                            dia_semana_short = ["Seg","Ter","Qua","Qui","Sex","Sáb","Dom"][dt_obj.weekday()]
+                        except Exception:
+                            dt_display = dt_str
+                            dia_semana_short = ""
+                        dist = fmt_dist(r["distance"])
+                        dur = fmt_dur(r.get("moving_time", 0))
+                        pace = fmt_pace(r.get("average_speed"))
+                        hr_txt = f'{round(r["average_heartrate"])} bpm' if r.get("average_heartrate") else ""
+                        carga = f'{run_load(r, ath):.0f}'
+                        name = r.get("name", "")
+
+                        hr_chip = (
+                            f'<span style="display:inline-block;font-size:0.72rem;font-weight:600;'
+                            f'color:#FF3B30;background:rgba(255,59,48,0.08);padding:0.15rem 0.45rem;'
+                            f'border-radius:6px;margin-left:0.3rem">♥ {hr_txt}</span>'
+                        ) if hr_txt else ""
 
                         st.markdown(
-                            f'<div style="overflow-x:auto;border-radius:12px;'
-                            f'border:1px solid #E5E5EA;box-shadow:0 1px 8px rgba(0,0,0,0.04);'
-                            f'font-family:Inter,-apple-system,sans-serif">'
-                            f'<table style="width:100%;border-collapse:collapse">'
-                            f'<thead><tr>{head_cells}</tr></thead>'
-                            f'<tbody>{rows_html}</tbody>'
-                            f'</table></div>',
+                            f'<div style="background:#FFFFFF;border-radius:14px;padding:0.9rem 1.1rem;'
+                            f'box-shadow:0 1px 8px rgba(0,0,0,0.04);border:1px solid rgba(0,0,0,0.04);'
+                            f'margin-bottom:0.5rem;border-left:3px solid {tipo_color}">'
+                            f'<div style="display:flex;justify-content:space-between;align-items:center">'
+                            f'<div>'
+                            f'<span style="font-weight:700;color:#1D1D1F;font-size:0.9rem">'
+                            f'{tipo_icon} {name or tipo_txt}</span>'
+                            f'<span style="font-size:0.78rem;color:#AEAEB2;margin-left:0.5rem">'
+                            f'{dia_semana_short} {dt_display}</span>'
+                            f'</div>'
+                            f'<span style="font-size:0.72rem;font-weight:600;color:{tipo_color};'
+                            f'background:{"rgba(26,138,58,0.08)" if is_w else "rgba(252,76,2,0.08)"};'
+                            f'padding:0.15rem 0.5rem;border-radius:6px">{tipo_txt}</span>'
+                            f'</div>'
+                            f'<div style="display:flex;gap:0.8rem;margin-top:0.4rem;flex-wrap:wrap">'
+                            f'<span style="font-size:0.82rem;color:#3A3A3C;font-weight:500">{dist}</span>'
+                            f'<span style="font-size:0.82rem;color:#6E6E73">{dur}</span>'
+                            f'<span style="font-size:0.82rem;color:#6E6E73">{pace}</span>'
+                            f'{hr_chip}'
+                            f'<span style="font-size:0.72rem;color:#AEAEB2;margin-left:auto">⚡ {carga}</span>'
+                            f'</div>'
+                            f'</div>',
                             unsafe_allow_html=True
                         )
 
@@ -1837,6 +1972,10 @@ def main():
                 "dias_fortalecimento": selecionados_fort,
             }
             save_athlete_profile(new_ath)
+            # Persist objetivo in cache so it survives session resets
+            if obj_v:
+                _store = _get_persistent_store()
+                _store["athlete_objetivo"] = obj_v
             st.success("Configurações de treino salvas na sessão.")
 
     # ══════════════════════════════════════════
@@ -1844,9 +1983,9 @@ def main():
     # ══════════════════════════════════════════
     if active_tab == 3:
 
-        # Credenciais (editáveis — salvas em session_state)
+        # Credenciais Strava (editáveis — salvas em session_state)
         st.markdown('<div class="form-section">', unsafe_allow_html=True)
-        st.markdown('<span class="form-label">Credenciais de API</span>', unsafe_allow_html=True)
+        st.markdown('<span class="form-label">Credenciais Strava</span>', unsafe_allow_html=True)
 
         c1, c2 = st.columns(2)
         with c1:
@@ -1857,9 +1996,6 @@ def main():
             client_secret_v = st.text_input("Strava Client Secret", value=cs,
                                             type="password", placeholder="••••••••",
                                             key="app_client_secret")
-        anthropic_v = st.text_input("Anthropic API Key", value=akey,
-                                    type="password", placeholder="sk-ant-...",
-                                    key="app_anthropic_key")
         redirect_v = st.text_input("URL do App (para OAuth)",
                                    value=st.session_state.get("redirect_uri", ""),
                                    placeholder="https://seu-app.streamlit.app",
@@ -1868,7 +2004,6 @@ def main():
         if st.button("Salvar credenciais", key="save_creds"):
             st.session_state.client_id = client_id_v
             st.session_state.client_secret = client_secret_v
-            st.session_state.anthropic_key = anthropic_v
             st.session_state.redirect_uri = redirect_v
             st.success("Credenciais salvas na sessão.")
         st.markdown('</div>', unsafe_allow_html=True)
