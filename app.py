@@ -1360,46 +1360,11 @@ def main():
 
     st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 
-    # ── Onboarding (não configurado) ──────
-    if not all([cid, cs, akey]):
-        st.markdown("""<div class="card" style="text-align:center;padding:3rem 2rem">
-            <div style="font-size:3rem;margin-bottom:1rem">🏃</div>
-            <p class="section-title" style="font-size:1.4rem">Bem-vindo ao Running Coach</p>
-            <p class="body-text" style="color:#6E6E73;max-width:420px;margin:0 auto 1.5rem">
-            Para começar, configure suas credenciais na aba
-            <strong>Configurações app</strong> — são necessários apenas 2 minutos.
-            </p>
-        </div>""", unsafe_allow_html=True)
+    # Flags para estado do app
+    needs_setup = not all([cid, cs, akey])
+    needs_connect = not connected
 
-        st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
-        c1, c2, c3 = st.columns(3)
-        for col, n, icon, txt in [
-            (c1, "1", "🔑", "Configure suas credenciais do Strava e da API Anthropic"),
-            (c2, "2", "🔗", "Conecte sua conta Strava com um clique"),
-            (c3, "3", "✨", "Gere sua sugestão de treino personalizada"),
-        ]:
-            with col:
-                st.markdown(f"""<div class="card-sm" style="text-align:center;padding:1.6rem 1rem">
-                    <div style="font-size:1.8rem;margin-bottom:0.6rem">{icon}</div>
-                    <div style="font-size:0.72rem;font-weight:700;color:#FC4C02;
-                         text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.5rem">
-                         Passo {n}</div>
-                    <p style="font-size:0.82rem;color:#6E6E73;margin:0;line-height:1.5">{txt}</p>
-                </div>""", unsafe_allow_html=True)
-        return
-
-    # ── Não conectado ──────────────────────
-    if not connected:
-        st.markdown("""<div class="card" style="text-align:center;padding:2.5rem 2rem">
-            <div style="font-size:2.5rem;margin-bottom:0.8rem">🔗</div>
-            <p class="section-title">Conecte seu Strava</p>
-            <p class="body-text" style="color:#6E6E73;margin-bottom:1.2rem">
-            Autorize o acesso à sua conta para buscar suas atividades.</p>
-        </div>""", unsafe_allow_html=True)
-        st.caption("→ Vá até a aba **Configurações app** para conectar.")
-        return
-
-    # ── Tabs ─────────────────────────────────
+    # ── Tabs (sempre visíveis) ─────────────────
     tab_treinos, tab_resumo, tab_config_treino, tab_config_app = st.tabs([
         "  🏃 Treinos da Semana  ",
         "  📊 Resumo últimos 30 dias  ",
@@ -1412,8 +1377,18 @@ def main():
     # ══════════════════════════════════════════
     with tab_treinos:
 
+        if needs_setup or needs_connect:
+            st.markdown(f"""<div class="card" style="text-align:center;padding:3rem 2rem">
+                <div style="font-size:3rem;margin-bottom:1rem">{'🔑' if needs_setup else '🔗'}</div>
+                <p class="section-title" style="font-size:1.2rem">
+                {'Configure suas credenciais' if needs_setup else 'Conecte seu Strava'}</p>
+                <p class="body-text" style="color:#6E6E73;max-width:420px;margin:0 auto">
+                {'Vá na aba <strong>🔧 Configurações app</strong> para inserir suas credenciais de API.' if needs_setup
+                 else 'Vá na aba <strong>🔧 Configurações app</strong> para autorizar o acesso ao Strava.'}</p>
+            </div>""", unsafe_allow_html=True)
+
         # Show weekly plan cards if a suggestion exists
-        if st.session_state.suggestion:
+        elif st.session_state.suggestion:
             plan = parse_weekly_plan(st.session_state.suggestion)
             if plan:
                 st.markdown('<p class="section-title" style="margin-bottom:1rem">Plano da semana</p>',
@@ -1450,8 +1425,8 @@ def main():
                         )
                     except Exception as e:
                         st.error(f"Erro ao gerar PDF: {e}")
-        else:
-            # Onboarding message — no training generated yet
+        elif not needs_setup and not needs_connect:
+            # Onboarding message — connected but no training generated yet
             st.markdown("""<div class="card" style="text-align:center;padding:2.5rem 2rem">
                 <div style="font-size:2.5rem;margin-bottom:0.8rem">📋</div>
                 <p class="section-title" style="font-size:1.2rem">Nenhum treino gerado ainda</p>
@@ -1460,29 +1435,32 @@ def main():
                 com base nas suas atividades recentes do Strava.</p>
             </div>""", unsafe_allow_html=True)
 
-        st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
+        if not needs_setup and not needs_connect:
+            st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
 
-        # ── Rest day indicator ──
-        desc_idx = ath.get("dias_descanso", [0, 2])
-        dias_pt  = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
-        hoje_idx = datetime.now().weekday()
-        hoje_nome = dias_pt[hoje_idx]
-        eh_desc  = hoje_idx in desc_idx
+        # ── Rest day indicator + Generate button (só se conectado) ──
+        gerar = False
+        if not needs_setup and not needs_connect:
+            desc_idx = ath.get("dias_descanso", [0, 2])
+            dias_pt  = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
+            hoje_idx = datetime.now().weekday()
+            hoje_nome = dias_pt[hoje_idx]
+            eh_desc  = hoje_idx in desc_idx
 
-        if eh_desc:
-            st.markdown(f"""<div class="card-sm" style="text-align:center;padding:1.2rem;
-                background:#F5F5F7;border:1.5px solid rgba(0,0,0,0.07)">
-                <span style="font-size:0.9rem;color:#6E6E73;font-weight:500">
-                🌙  Hoje é <strong>{hoje_nome}</strong> — dia de descanso programado</span>
-            </div>""", unsafe_allow_html=True)
-            st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+            if eh_desc:
+                st.markdown(f"""<div class="card-sm" style="text-align:center;padding:1.2rem;
+                    background:#F5F5F7;border:1.5px solid rgba(0,0,0,0.07)">
+                    <span style="font-size:0.9rem;color:#6E6E73;font-weight:500">
+                    🌙  Hoje é <strong>{hoje_nome}</strong> — dia de descanso programado</span>
+                </div>""", unsafe_allow_html=True)
+                st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 
-        # ── Generate button at BOTTOM ──
-        btn_label = "🧘 Ver sugestão de recuperação" if eh_desc else "🏃 Gerar treino semanal"
+            # ── Generate button at BOTTOM ──
+            btn_label = "🧘 Ver sugestão de recuperação" if eh_desc else "🏃 Gerar treino semanal"
 
-        col_btn, col_sp = st.columns([1, 2])
-        with col_btn:
-            gerar = st.button(btn_label, use_container_width=True, key="gen_treino")
+            col_btn, col_sp = st.columns([1, 2])
+            with col_btn:
+                gerar = st.button(btn_label, use_container_width=True, key="gen_treino")
 
         if gerar:
             if not ath.get("nome"):
@@ -1536,112 +1514,123 @@ def main():
     # ══════════════════════════════════════════
     with tab_resumo:
 
-        # Load data
-        try:
-            token = get_valid_token(cid, cs)
-        except Exception as e:
-            st.error(f"Erro de autenticação: {e}")
-            token = None
+        if needs_setup or needs_connect:
+            st.markdown(f"""<div class="card" style="text-align:center;padding:3rem 2rem">
+                <div style="font-size:3rem;margin-bottom:1rem">📊</div>
+                <p class="section-title" style="font-size:1.2rem">
+                {'Configure suas credenciais' if needs_setup else 'Conecte seu Strava'}</p>
+                <p class="body-text" style="color:#6E6E73;max-width:420px;margin:0 auto">
+                Vá na aba <strong>🔧 Configurações app</strong> para
+                {'inserir suas credenciais de API' if needs_setup else 'autorizar o acesso ao Strava'}
+                e ver o resumo dos seus treinos.</p>
+            </div>""", unsafe_allow_html=True)
+        else:
+            # Load data
+            try:
+                token = get_valid_token(cid, cs)
+            except Exception as e:
+                st.error(f"Erro de autenticação: {e}")
+                token = None
 
-        if token:
-            with st.spinner("Carregando atividades do Strava..."):
-                try:
-                    runs = fetch_runs(token)
-                except Exception as e:
-                    st.error(f"Erro ao buscar atividades: {e}")
-                    runs = []
+            if token:
+                with st.spinner("Carregando atividades do Strava..."):
+                    try:
+                        runs = fetch_runs(token)
+                    except Exception as e:
+                        st.error(f"Erro ao buscar atividades: {e}")
+                        runs = []
 
-            if not runs:
-                st.markdown("""<div class="card" style="text-align:center;padding:2rem">
-                    <p style="font-size:2rem">😴</p>
-                    <p class="body-text">Nenhuma atividade encontrada nos últimos 28 dias.</p>
-                </div>""", unsafe_allow_html=True)
-            else:
-                run_only  = [r for r in runs if not r.get("_is_walk")]
-                walk_only = [r for r in runs if r.get("_is_walk")]
+                if not runs:
+                    st.markdown("""<div class="card" style="text-align:center;padding:2rem">
+                        <p style="font-size:2rem">😴</p>
+                        <p class="body-text">Nenhuma atividade encontrada nos últimos 28 dias.</p>
+                    </div>""", unsafe_allow_html=True)
+                else:
+                    run_only  = [r for r in runs if not r.get("_is_walk")]
+                    walk_only = [r for r in runs if r.get("_is_walk")]
 
-                # Compute metrics
-                ref = run_only if run_only else runs
-                total_km = sum(r["distance"] for r in run_only) / 1000
-                avg_pace = fmt_pace(sum(r.get("average_speed", 0) for r in ref) / len(ref))
-                lbd      = loads_by_day(runs, ath)
-                atl, ctl, tsb = atl_ctl_tsb(lbd)
-                tsb_txt, tsb_cls = tsb_label(tsb)
-                trend    = pace_trend(run_only or runs)
-                doff     = days_off(runs)
-                doff_txt = (f"Ativo {'' if doff == 0 else f'há {doff}d'}" if doff is not None else "—")
+                    # Compute metrics
+                    ref = run_only if run_only else runs
+                    total_km = sum(r["distance"] for r in run_only) / 1000
+                    avg_pace = fmt_pace(sum(r.get("average_speed", 0) for r in ref) / len(ref))
+                    lbd      = loads_by_day(runs, ath)
+                    atl, ctl, tsb = atl_ctl_tsb(lbd)
+                    tsb_txt, tsb_cls = tsb_label(tsb)
+                    trend    = pace_trend(run_only or runs)
+                    doff     = days_off(runs)
+                    doff_txt = (f"Ativo {'' if doff == 0 else f'há {doff}d'}" if doff is not None else "—")
 
-                # ── Bento Grid de métricas ─────────────
-                c1, c2, c3, c4 = st.columns(4)
-                with c1:
-                    st.markdown(metric_card("Volume 28 dias", f"{total_km:.1f}", "km",
-                                            f"{len(run_only)} corridas" + (f" · {len(walk_only)} caminhadas" if walk_only else ""),
-                                            "badge-orange"),
-                                unsafe_allow_html=True)
-                with c2:
-                    st.markdown(metric_card("Pace médio", avg_pace, sub=trend or ""),
-                                unsafe_allow_html=True)
-                with c3:
-                    st.markdown(metric_card("ATL / CTL", f"{atl} / {ctl}",
-                                            sub="fadiga / condicionamento"),
-                                unsafe_allow_html=True)
-                with c4:
-                    st.markdown(metric_card("Forma (TSB)", f"{tsb:+.1f}",
-                                            sub=doff_txt, badge=tsb_txt, badge_cls=tsb_cls),
-                                unsafe_allow_html=True)
+                    # ── Bento Grid de métricas ─────────────
+                    c1, c2, c3, c4 = st.columns(4)
+                    with c1:
+                        st.markdown(metric_card("Volume 28 dias", f"{total_km:.1f}", "km",
+                                                f"{len(run_only)} corridas" + (f" · {len(walk_only)} caminhadas" if walk_only else ""),
+                                                "badge-orange"),
+                                    unsafe_allow_html=True)
+                    with c2:
+                        st.markdown(metric_card("Pace médio", avg_pace, sub=trend or ""),
+                                    unsafe_allow_html=True)
+                    with c3:
+                        st.markdown(metric_card("ATL / CTL", f"{atl} / {ctl}",
+                                                sub="fadiga / condicionamento"),
+                                    unsafe_allow_html=True)
+                    with c4:
+                        st.markdown(metric_card("Forma (TSB)", f"{tsb:+.1f}",
+                                                sub=doff_txt, badge=tsb_txt, badge_cls=tsb_cls),
+                                    unsafe_allow_html=True)
 
-                st.markdown("<div style='height:0.8rem'></div>", unsafe_allow_html=True)
+                    st.markdown("<div style='height:0.8rem'></div>", unsafe_allow_html=True)
 
-                # ── Weekly km bar chart ────────────────
-                weekly_data = compute_weekly_km(runs)
-                render_weekly_km_chart(weekly_data)
+                    # ── Weekly km bar chart ────────────────
+                    weekly_data = compute_weekly_km(runs)
+                    render_weekly_km_chart(weekly_data)
 
-                st.markdown("<div style='height:0.8rem'></div>", unsafe_allow_html=True)
+                    st.markdown("<div style='height:0.8rem'></div>", unsafe_allow_html=True)
 
-                # ── Activity detail table in expander ──
-                lbl_count = f"{len(run_only)} corridas" + (f" + {len(walk_only)} caminhadas" if walk_only else "")
-                with st.expander(f"  📋  Atividades recentes  ({lbl_count})", expanded=False):
-                    rows_html = ""
-                    headers = ["Data", "Tipo", "Nome", "Distância", "Duração", "Pace", "FC", "Carga"]
-                    head_cells = "".join(
-                        f'<th style="padding:9px 12px;background:#1D1D1F !important;'
-                        f'color:#FFFFFF !important;-webkit-text-fill-color:#FFFFFF !important;'
-                        f'font-size:0.74rem;font-weight:600;text-align:left;'
-                        f'white-space:nowrap;letter-spacing:0.04em">{h}</th>'
-                        for h in headers
-                    )
-                    for i, r in enumerate(runs):
-                        is_w = r.get("_is_walk", False)
-                        bg   = "#FFFFFF" if i % 2 == 0 else "#F5F5F7"
-                        tipo_color = "#1A8A3A" if is_w else "#FC4C02"
-                        tipo_txt   = "🚶 Caminhada" if is_w else "🏃 Corrida"
-                        vals = [
-                            r["start_date"][:10],
-                            f'<span style="color:{tipo_color};font-weight:600;font-size:0.82rem">{tipo_txt}</span>',
-                            r.get("name", ""),
-                            fmt_dist(r["distance"]),
-                            fmt_dur(r.get("moving_time", 0)),
-                            fmt_pace(r.get("average_speed")),
-                            f'{round(r["average_heartrate"])} bpm' if r.get("average_heartrate") else "—",
-                            f'{run_load(r, ath):.0f}' + (" ♻️" if is_w else ""),
-                        ]
-                        cells = "".join(
-                            f'<td style="padding:8px 12px;color:#1D1D1F;font-size:0.84rem;'
-                            f'border-bottom:1px solid #E5E5EA;white-space:nowrap">{v}</td>'
-                            for v in vals
+                    # ── Activity detail table in expander ──
+                    lbl_count = f"{len(run_only)} corridas" + (f" + {len(walk_only)} caminhadas" if walk_only else "")
+                    with st.expander(f"  📋  Atividades recentes  ({lbl_count})", expanded=False):
+                        rows_html = ""
+                        headers = ["Data", "Tipo", "Nome", "Distância", "Duração", "Pace", "FC", "Carga"]
+                        head_cells = "".join(
+                            f'<th style="padding:9px 12px;background:#1D1D1F !important;'
+                            f'color:#FFFFFF !important;-webkit-text-fill-color:#FFFFFF !important;'
+                            f'font-size:0.74rem;font-weight:600;text-align:left;'
+                            f'white-space:nowrap;letter-spacing:0.04em">{h}</th>'
+                            for h in headers
                         )
-                        rows_html += f'<tr style="background:{bg}">{cells}</tr>'
+                        for i, r in enumerate(runs):
+                            is_w = r.get("_is_walk", False)
+                            bg   = "#FFFFFF" if i % 2 == 0 else "#F5F5F7"
+                            tipo_color = "#1A8A3A" if is_w else "#FC4C02"
+                            tipo_txt   = "🚶 Caminhada" if is_w else "🏃 Corrida"
+                            vals = [
+                                r["start_date"][:10],
+                                f'<span style="color:{tipo_color};font-weight:600;font-size:0.82rem">{tipo_txt}</span>',
+                                r.get("name", ""),
+                                fmt_dist(r["distance"]),
+                                fmt_dur(r.get("moving_time", 0)),
+                                fmt_pace(r.get("average_speed")),
+                                f'{round(r["average_heartrate"])} bpm' if r.get("average_heartrate") else "—",
+                                f'{run_load(r, ath):.0f}' + (" ♻️" if is_w else ""),
+                            ]
+                            cells = "".join(
+                                f'<td style="padding:8px 12px;color:#1D1D1F;font-size:0.84rem;'
+                                f'border-bottom:1px solid #E5E5EA;white-space:nowrap">{v}</td>'
+                                for v in vals
+                            )
+                            rows_html += f'<tr style="background:{bg}">{cells}</tr>'
 
-                    st.markdown(
-                        f'<div style="overflow-x:auto;border-radius:12px;'
-                        f'border:1px solid #E5E5EA;box-shadow:0 1px 8px rgba(0,0,0,0.04);'
-                        f'font-family:Inter,-apple-system,sans-serif">'
-                        f'<table style="width:100%;border-collapse:collapse">'
-                        f'<thead><tr>{head_cells}</tr></thead>'
-                        f'<tbody>{rows_html}</tbody>'
-                        f'</table></div>',
-                        unsafe_allow_html=True
-                    )
+                        st.markdown(
+                            f'<div style="overflow-x:auto;border-radius:12px;'
+                            f'border:1px solid #E5E5EA;box-shadow:0 1px 8px rgba(0,0,0,0.04);'
+                            f'font-family:Inter,-apple-system,sans-serif">'
+                            f'<table style="width:100%;border-collapse:collapse">'
+                            f'<thead><tr>{head_cells}</tr></thead>'
+                            f'<tbody>{rows_html}</tbody>'
+                            f'</table></div>',
+                            unsafe_allow_html=True
+                        )
 
     # ══════════════════════════════════════════
     # TAB 3: CONFIGURAÇÕES TREINO
