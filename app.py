@@ -192,16 +192,20 @@ header[data-testid="stHeader"] { background: transparent !important; }
 
 /* ── Buttons (primary = orange filled) ──────── */
 button[data-testid="baseButton-primary"],
+button[data-testid="baseButton-primary"]:link,
 button[data-testid="baseButton-primary"]:visited,
 button[data-testid="baseButton-primary"]:active,
 button[data-testid="baseButton-primary"]:focus,
 button[data-testid="baseButton-primary"]:focus-visible,
 button[data-testid="baseButton-primary"]:focus-within,
-.stButton > button:not([kind="secondary"]):not([data-testid="baseButton-secondary"]) {
+button[data-testid="baseButton-primary"][disabled],
+.stButton > button:not([data-testid="baseButton-secondary"]) {
     background: #FC4C02 !important;
+    background-color: #FC4C02 !important;
     color: #FFFFFF !important;
     -webkit-text-fill-color: #FFFFFF !important;
     border: none !important;
+    border-color: transparent !important;
     border-radius: 12px !important;
     font-family: 'Inter', sans-serif !important;
     font-weight: 600 !important;
@@ -211,31 +215,41 @@ button[data-testid="baseButton-primary"]:focus-within,
     box-shadow: 0 2px 10px rgba(252,76,2,0.22) !important;
     letter-spacing: -0.01em !important;
     outline: none !important;
+    opacity: 1 !important;
 }
-button[data-testid="baseButton-primary"] p,
-button[data-testid="baseButton-primary"] span,
-button[data-testid="baseButton-primary"] div {
+button[data-testid="baseButton-primary"] *,
+.stButton > button:not([data-testid="baseButton-secondary"]) * {
     color: #FFFFFF !important;
     -webkit-text-fill-color: #FFFFFF !important;
+    opacity: 1 !important;
 }
 button[data-testid="baseButton-primary"]:hover,
-.stButton > button:not([kind="secondary"]):not([data-testid="baseButton-secondary"]):hover {
+.stButton > button:not([data-testid="baseButton-secondary"]):hover {
     background: #E03400 !important;
+    background-color: #E03400 !important;
     color: #FFFFFF !important;
     -webkit-text-fill-color: #FFFFFF !important;
     box-shadow: 0 4px 18px rgba(252,76,2,0.35) !important;
     transform: translateY(-1px) !important;
 }
+button[data-testid="baseButton-primary"]:hover *,
+.stButton > button:not([data-testid="baseButton-secondary"]):hover * {
+    color: #FFFFFF !important;
+    -webkit-text-fill-color: #FFFFFF !important;
+}
 .stButton > button:active { transform: translateY(0) !important; }
 
 /* ── Buttons (secondary = outlined, for inactive tabs) ── */
 button[data-testid="baseButton-secondary"],
+button[data-testid="baseButton-secondary"]:link,
 button[data-testid="baseButton-secondary"]:visited,
 button[data-testid="baseButton-secondary"]:active,
 button[data-testid="baseButton-secondary"]:focus,
 button[data-testid="baseButton-secondary"]:focus-visible,
-button[data-testid="baseButton-secondary"]:focus-within {
+button[data-testid="baseButton-secondary"]:focus-within,
+button[data-testid="baseButton-secondary"][disabled] {
     background: #FFFFFF !important;
+    background-color: #FFFFFF !important;
     color: #1D1D1F !important;
     -webkit-text-fill-color: #1D1D1F !important;
     border: 1.5px solid rgba(0,0,0,0.12) !important;
@@ -248,19 +262,27 @@ button[data-testid="baseButton-secondary"]:focus-within {
     transition: none !important;
     letter-spacing: -0.01em !important;
     outline: none !important;
+    opacity: 1 !important;
 }
-button[data-testid="baseButton-secondary"] p,
-button[data-testid="baseButton-secondary"] span,
-button[data-testid="baseButton-secondary"] div {
+button[data-testid="baseButton-secondary"] *,
+button[data-testid="baseButton-secondary"]:active *,
+button[data-testid="baseButton-secondary"]:focus *,
+button[data-testid="baseButton-secondary"]:visited * {
     color: #1D1D1F !important;
     -webkit-text-fill-color: #1D1D1F !important;
+    opacity: 1 !important;
 }
 button[data-testid="baseButton-secondary"]:hover {
     background: #F5F5F7 !important;
+    background-color: #F5F5F7 !important;
     color: #1D1D1F !important;
     -webkit-text-fill-color: #1D1D1F !important;
     transform: none !important;
     box-shadow: none !important;
+}
+button[data-testid="baseButton-secondary"]:hover * {
+    color: #1D1D1F !important;
+    -webkit-text-fill-color: #1D1D1F !important;
 }
 
 /* ── Download Button ────────────────────────── */
@@ -491,7 +513,7 @@ def _get_persistent_store():
     """Dict global que persiste enquanto o app estiver rodando no Cloud.
        Sobrevive a reruns, troca de aba, e screen lock do celular.
        Só reseta quando o app dorme completamente (~15min inativo)."""
-    return {"strava_tokens": None, "suggestion": None, "_atl": None, "_ctl": None, "_tsb": None, "athlete_objetivo": None, "athlete_dias_descanso": None, "athlete_dias_fortalecimento": None, "athlete_treinos_semana": None}
+    return {"strava_tokens": None, "suggestion": None, "_atl": None, "_ctl": None, "_tsb": None, "athlete_objetivo": None, "athlete_dias_descanso": None, "athlete_dias_fortalecimento": None, "athlete_treinos_semana": None, "client_id": None, "client_secret": None}
 
 # ══════════════════════════════════════════════
 # SESSION STATE HELPERS (Cloud-adapted)
@@ -546,6 +568,11 @@ def init_session_state():
         st.session_state.athlete["dias_fortalecimento"] = store["athlete_dias_fortalecimento"]
     if store.get("athlete_treinos_semana") is not None:
         st.session_state.athlete["treinos_semana"] = store["athlete_treinos_semana"]
+    # Sync Strava credentials from persistent store
+    if store.get("client_id") and not st.session_state.get("client_id"):
+        st.session_state.client_id = store["client_id"]
+    if store.get("client_secret") and not st.session_state.get("client_secret"):
+        st.session_state.client_secret = store["client_secret"]
 
 def get_athlete_profile():
     """Retorna perfil do atleta de session_state."""
@@ -2101,7 +2128,11 @@ def main():
             st.session_state.client_id = client_id_v
             st.session_state.client_secret = client_secret_v
             st.session_state.redirect_uri = redirect_v
-            st.success("Credenciais salvas na sessão.")
+            # Persist credentials in cache (survives session resets)
+            _store = _get_persistent_store()
+            _store["client_id"] = client_id_v
+            _store["client_secret"] = client_secret_v
+            st.success("Credenciais salvas.")
         st.markdown('</div>', unsafe_allow_html=True)
 
         # Conexão Strava
