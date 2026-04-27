@@ -5,14 +5,14 @@ Design system: Apple-inspired · Bento Grid · Inter font
 Cloud-adapted: session_state para tudo, st.secrets opcional como pré-preenchimento, OAuth via query params
 """
 
-import json, re, time, warnings
+import html as html_mod
+import json, logging, re, time, uuid, warnings
 from datetime import datetime, timedelta
 from urllib.parse import urlparse, parse_qs
 
-warnings.filterwarnings("ignore", message="Unverified HTTPS request")
-
 import requests
 import streamlit as st
+from supabase import create_client, Client as SupabaseClient
 
 # ══════════════════════════════════════════════
 # CONSTANTS & CLOUD CONFIG
@@ -505,15 +505,186 @@ hr { border: none !important; border-top: 1.5px solid rgba(0,0,0,0.06) !importan
 """
 
 # ══════════════════════════════════════════════
-# PERSISTENT TOKEN STORE (sobrevive a reruns e screen lock)
+# SUPABASE CLIENT
+# ══════════════════════════════════════════════
+#
+# Tabela necessária no Supabase (executar no SQL Editor):
+#
+# create table public.user_profiles (
+#   id uuid references auth.users on delete cascade primary key,
+#   email text,
+#   nome text default '',
+#   athlete_profile jsonb default '{}',
+#   strava_client_id text,
+#   strava_client_secret text,
+#   strava_tokens jsonb,
+#   suggestion text,
+#   atl real,
+#   ctl real,
+#   tsb real,
+#   created_at timestamptz default now(),
+#   updated_at timestamptz default now()
+# );
+#
+# alter table public.user_profiles enable row level security;
+# create policy "Users can view own profile"
+#   on public.user_profiles for select using (auth.uid() = id);
+# create policy "Users can update own profile"
+#   on public.user_profiles for update using (auth.uid() = id);
+# create policy "Users can insert own profile"
+#   on public.user_profiles for insert with check (auth.uid() = id);
+#
+# Para auto-confirmação de email (desenvolvimento), vá em:
+# Authentication → Settings → desabilitar "Enable email confirmations"
+
+@st.cache_resource
+def _get_supabase_client() -> SupabaseClient:
+    """Cria client Supabase singleton a partir de st.secrets."""
+    url = _get_secret("supabase_url", "")
+    key = _get_secret("supabase_anon_key", "")
+    if not url or not key:
+        return None
+    return create_client(url, key)
+
+def _supabase_available():
+    """Retorna True se Supabase está configurado."""
+    return _get_supabase_client() is not None
+
+
+# ── Auth helpers ─────────────────────────────
+
+def supabase_register(email: str, password: str, nome: str):
+    """Registra novo usuário e cria perfil na tabela user_profiles."""
+    sb = _get_supabase_client()
+    if not sb:
+        return None, "Supabase não configurado."
+    try:
+        res = sb.auth.sign_up({"email": email, "password": password})
+        if res.user:
+            # Criar registro no user_profiles
+            sb.table("user_profiles").insert({
+                "id": res.user.id,
+                "email": email,
+                "nome": nome,
+                "athlete_profile": json.dumps({
+                    "nome": nome,
+                    "nivel": "intermediário",
+                    "objetivo": "",
+                    "treinos_semana": 3,
+                    "fc_max": 185,
+                    "fc_repouso": 50,
+                    "pace_limiar": "06:00",
+                    "dias_descanso": [],
+                    "dias_fortalecimento": [],
+                }),
+            }).execute()
+            return res.session, None
+        return None, "Erro ao criar conta. Tente novamente."
+    except Exception as e:
+        msg = str(e)
+        if "already registered" in msg.lower() or "already been registered" in msg.lower():
+            return None, "Este email já está cadastrado. Faça login."
+        logging.exception("Erro no registro Supabase")
+        return None, "Erro ao criar conta. Verifique os dados e tente novamente."
+
+def supabase_login(email: str, password: str):
+    """Faz login e retorna session."""
+    sb = _get_supabase_client()
+    if not sb:
+        return None, "Supabase não configurado."
+    try:
+        res = sb.auth.sign_in_with_password({"email": email, "password": password})
+        if res.session:
+            return res.session, None
+        return None, "Credenciais inválidas."
+    except Exception as e:
+        msg = str(e)
+        if "invalid" in msg.lower():
+            return None, "Email ou senha incorretos."
+        logging.exception("Erro no login Supabase")
+        return None, "Erro ao fazer login. Tente novamente."
+
+def supabase_logout():
+    """Faz logout e limpa session_state."""
+    sb = _get_supabase_client()
+    if sb:
+        try:
+            sb.auth.sign_out()
+        except Exception:
+            pass
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+
+
+# ── Supabase CRUD ────────────────────────────
+
+def supabase_load_user_data(user_id: str) -> dict:
+    """Carrega todos os dados do usuário do Supabase."""
+    sb = _get_supabase_client()
+    if not sb:
+        return {}
+    try:
+        res = sb.table("user_profiles").select("*").eq("id", user_id).single().execute()
+        return res.data or {}
+    except Exception:
+        logging.exception("Erro ao carregar dados do Supabase")
+        return {}
+
+def supabase_save_field(user_id: str, **fields):
+    """Salva campos específicos no Supabase (merge parcial)."""
+    sb = _get_supabase_client()
+    if not sb or not user_id:
+        return
+    try:
+        fields["updated_at"] = datetime.now().isoformat()
+        sb.table("user_profiles").update(fields).eq("id", user_id).execute()
+    except Exception:
+        logging.exception("Erro ao salvar no Supabase")
+
+def supabase_save_training(user_id: str, suggestion: str, atl: float, ctl: float, tsb: float):
+    """Salva treino gerado."""
+    supabase_save_field(user_id, suggestion=suggestion, atl=atl, ctl=ctl, tsb=tsb)
+
+def supabase_save_athlete_profile(user_id: str, profile: dict):
+    """Salva perfil do atleta."""
+    supabase_save_field(user_id,
+                        athlete_profile=json.dumps(profile, ensure_ascii=False),
+                        nome=profile.get("nome", ""))
+
+def supabase_save_strava_credentials(user_id: str, client_id: str, client_secret: str):
+    """Salva credenciais Strava."""
+    supabase_save_field(user_id, strava_client_id=client_id, strava_client_secret=client_secret)
+
+def supabase_save_strava_tokens(user_id: str, tokens):
+    """Salva tokens OAuth do Strava."""
+    supabase_save_field(user_id,
+                        strava_tokens=json.dumps(tokens) if tokens else None)
+
+
+# ══════════════════════════════════════════════
+# PERSISTENT IN-MEMORY STORE (fallback se Supabase não configurado)
 # ══════════════════════════════════════════════
 
 @st.cache_resource
+def _get_all_stores():
+    """Dict global de stores por sessão."""
+    return {}
+
 def _get_persistent_store():
-    """Dict global que persiste enquanto o app estiver rodando no Cloud.
-       Sobrevive a reruns, troca de aba, e screen lock do celular.
-       Só reseta quando o app dorme completamente (~15min inativo)."""
-    return {"strava_tokens": None, "suggestion": None, "_atl": None, "_ctl": None, "_tsb": None, "athlete_objetivo": None, "athlete_dias_descanso": None, "athlete_dias_fortalecimento": None, "athlete_treinos_semana": None, "client_id": None, "client_secret": None}
+    """Store isolado por sessão (fallback in-memory se sem Supabase)."""
+    if "_session_id" not in st.session_state:
+        st.session_state._session_id = uuid.uuid4().hex
+    sid = st.session_state._session_id
+    stores = _get_all_stores()
+    if sid not in stores:
+        stores[sid] = {
+            "strava_tokens": None, "suggestion": None,
+            "_atl": None, "_ctl": None, "_tsb": None,
+            "athlete_objetivo": None, "athlete_dias_descanso": None,
+            "athlete_dias_fortalecimento": None, "athlete_treinos_semana": None,
+            "client_id": None, "client_secret": None,
+        }
+    return stores[sid]
 
 # ══════════════════════════════════════════════
 # SESSION STATE HELPERS (Cloud-adapted)
@@ -525,7 +696,7 @@ def init_session_state():
     defaults = {
         "strava_tokens": None,
         "athlete": {
-            "nome": "Nikola",
+            "nome": "",
             "nivel": "intermediário",
             "objetivo": "",
             "treinos_semana": 3,
@@ -543,7 +714,7 @@ def init_session_state():
         # Credenciais via st.secrets (configuradas no painel do Streamlit Cloud)
         "client_id": _get_secret("client_id", ""),
         "client_secret": _get_secret("client_secret", ""),
-        "anthropic_key": _get_secret("anthropic_key", ""),
+        # anthropic_key is accessed ONLY via st.secrets — never stored in session_state
         "redirect_uri": _get_secret("redirect_uri",
             "https://stravarunningcoach.streamlit.app"),
     }
@@ -579,10 +750,10 @@ def get_athlete_profile():
     return st.session_state.athlete or {}
 
 def get_credentials():
-    """Retorna credenciais de session_state."""
+    """Retorna credenciais. Anthropic key vem SOMENTE de st.secrets (nunca session_state)."""
     return (st.session_state.client_id,
             st.session_state.client_secret,
-            st.session_state.anthropic_key)
+            _get_secret("anthropic_key", ""))
 
 def save_athlete_profile(athlete_dict):
     """Salva perfil do atleta em session_state."""
@@ -598,22 +769,68 @@ def get_strava_tokens():
     return st.session_state.strava_tokens
 
 def save_strava_tokens(tokens):
-    """Salva tokens no persistent store E no session_state."""
+    """Salva tokens no persistent store, session_state, e Supabase."""
     store = _get_persistent_store()
     store["strava_tokens"] = tokens
     st.session_state.strava_tokens = tokens
+    # Persist to Supabase
+    _uid = st.session_state.get("sb_user_id")
+    if _uid:
+        supabase_save_strava_tokens(_uid, tokens)
 
 # ══════════════════════════════════════════════
 # STRAVA AUTH (Cloud-adapted)
 # ══════════════════════════════════════════════
 
+class StravaLimitError(Exception):
+    """Erro quando o app Strava excede o limite de atletas conectados."""
+    pass
+
+def _render_strava_limit_help():
+    """Mostra instruções para o usuário criar seu próprio app Strava."""
+    st.markdown(f"""<div class="card" style="border-left:4px solid #FF9500;margin-top:1rem">
+        <p class="section-title" style="color:#FF9500;font-size:1rem">
+        ⚠️ Limite de atletas excedido</p>
+        <p class="body-text" style="margin-bottom:0.8rem">
+        O app Strava compartilhado atingiu o número máximo de atletas permitidos.
+        Para continuar, crie seu próprio app Strava (leva 2 minutos):</p>
+        <p class="body-text" style="margin-bottom:0.3rem">
+        <strong>1.</strong> Acesse
+        <a href="https://www.strava.com/settings/api" target="_blank"
+           style="color:#FC4C02;font-weight:600">strava.com/settings/api</a></p>
+        <p class="body-text" style="margin-bottom:0.3rem">
+        <strong>2.</strong> Preencha: nome do app (qualquer um), categoria "Training",
+        website e callback = <code style="background:#F5F5F7;padding:0.15rem 0.4rem;
+        border-radius:4px;font-size:0.82rem">https://stravarunningcoach.streamlit.app</code></p>
+        <p class="body-text" style="margin-bottom:0.3rem">
+        <strong>3.</strong> Copie o <strong>Client ID</strong> e o <strong>Client Secret</strong></p>
+        <p class="body-text">
+        <strong>4.</strong> Cole na aba <strong>🔧 Config App</strong> deste aplicativo e salve</p>
+    </div>""", unsafe_allow_html=True)
+
 def _req(method, url, **kw):
-    return getattr(requests, method)(url, verify=False, timeout=15, **kw)
+    return getattr(requests, method)(url, timeout=15, **kw)
+
+def _check_strava_limit(response):
+    """Verifica se a resposta do Strava indica limite de atletas excedido."""
+    if response.status_code == 403:
+        body = ""
+        try:
+            body = response.text.lower()
+        except Exception:
+            pass
+        if "athlete" in body or "limit" in body or response.status_code == 403:
+            raise StravaLimitError(
+                "O app Strava atingiu o limite de atletas conectados. "
+                "Crie seu próprio app em strava.com/settings/api e insira "
+                "seu Client ID e Secret na aba ⚙️ Config App."
+            )
 
 def exchange_code(cid, cs, code):
     r = _req("post", "https://www.strava.com/oauth/token",
              data={"client_id": cid, "client_secret": cs,
                    "code": code, "grant_type": "authorization_code"})
+    _check_strava_limit(r)
     r.raise_for_status()
     return r.json()
 
@@ -621,6 +838,7 @@ def refresh_strava_token(cid, cs, rt):
     r = _req("post", "https://www.strava.com/oauth/token",
              data={"client_id": cid, "client_secret": cs,
                    "refresh_token": rt, "grant_type": "refresh_token"})
+    _check_strava_limit(r)
     r.raise_for_status()
     return r.json()
 
@@ -654,18 +872,49 @@ def _detect_app_url():
         pass
     return "http://localhost"
 
+def _validate_redirect_uri(uri):
+    """Valida que a redirect_uri é HTTPS e pertence a um domínio confiável."""
+    if not uri:
+        return False
+    parsed = urlparse(uri)
+    # Permitir localhost para dev e *.streamlit.app para produção
+    allowed = (
+        parsed.hostname == "localhost"
+        or (parsed.hostname and parsed.hostname.endswith(".streamlit.app"))
+    )
+    if not allowed:
+        return False
+    # Em produção, exigir HTTPS
+    if parsed.hostname != "localhost" and parsed.scheme != "https":
+        return False
+    return True
+
 def build_auth_url(cid):
-    """Constrói URL de autorização do Strava."""
+    """Constrói URL de autorização do Strava com state anti-CSRF."""
     redirect = _detect_app_url()
+    if not _validate_redirect_uri(redirect):
+        st.error("URL de redirecionamento inválida. Use um domínio *.streamlit.app com HTTPS.")
+        return ""
+    # Generate a random state token to prevent CSRF attacks
+    state = uuid.uuid4().hex
+    st.session_state._oauth_state = state
     return (f"https://www.strava.com/oauth/authorize?client_id={cid}"
             f"&response_type=code&redirect_uri={redirect}"
-            f"&approval_prompt=force&scope={SCOPE}")
+            f"&approval_prompt=force&scope={SCOPE}&state={state}")
 
 def handle_oauth_callback():
-    """Detecta e processa callback do OAuth via query params."""
+    """Detecta e processa callback do OAuth via query params.
+       Valida state parameter para prevenir ataques CSRF."""
     query_params = st.query_params
     if "code" in query_params:
         code = query_params["code"]
+        # Validate state parameter (CSRF protection)
+        received_state = query_params.get("state", "")
+        expected_state = st.session_state.get("_oauth_state", "")
+        if expected_state and received_state != expected_state:
+            st.error("Erro de segurança: state inválido. Tente autorizar novamente.")
+            st.query_params.clear()
+            return False
         try:
             cid = st.session_state.get("client_id", "")
             cs  = st.session_state.get("client_secret", "")
@@ -679,10 +928,18 @@ def handle_oauth_callback():
                 "expires_at": data["expires_at"]
             })
             st.query_params.clear()
-            st.success(f"Conectado! Bem-vindo, {data.get('athlete', {}).get('firstname', 'Atleta')}!")
+            # Clear the state token after successful auth
+            st.session_state.pop("_oauth_state", None)
+            firstname = html_mod.escape(data.get('athlete', {}).get('firstname', 'Atleta'))
+            st.success(f"Conectado! Bem-vindo, {firstname}!")
             st.rerun()
+        except StravaLimitError as e:
+            st.query_params.clear()
+            st.error(str(e))
+            _render_strava_limit_help()
+            return False
         except Exception as e:
-            st.error(f"Erro na autenticação: {e}")
+            st.error("Erro na autenticação. Verifique suas credenciais e tente novamente.")
             return False
     return True
 
@@ -697,6 +954,7 @@ def fetch_runs(token, days=28):
     r = _req("get", "https://www.strava.com/api/v3/athlete/activities",
              headers={"Authorization": f"Bearer {token}"},
              params={"after": after, "per_page": 50})
+    _check_strava_limit(r)
     r.raise_for_status()
     all_types = RUN_TYPES | WALK_TYPES
     activities = [a for a in r.json() if (a.get("sport_type") or a.get("type")) in all_types]
@@ -959,7 +1217,7 @@ DOM: Fortalecimento de pernas
                      "content-type": "application/json"},
             json={"model": model, "max_tokens": 2048,
                   "messages": [{"role": "user", "content": prompt}]},
-            verify=False, timeout=90,
+            timeout=90,
         )
         if r.status_code == 404:
             continue   # modelo não disponível nesta conta → tenta o próximo
@@ -1643,6 +1901,134 @@ def render_weekly_km_chart(weekly_data):
 # APP PRINCIPAL
 # ══════════════════════════════════════════════
 
+def _render_auth_screen():
+    """Renderiza tela de login/registro com design Apple-inspired."""
+    st.markdown("""<div style="max-width:420px;margin:3rem auto;text-align:center">
+        <div style="font-size:3rem;margin-bottom:0.5rem">🏃</div>
+        <p class="page-title" style="font-size:1.8rem;margin-bottom:0.3rem">Running Coach</p>
+        <p class="page-subtitle" style="margin-bottom:2rem">Faça login para acessar seus treinos</p>
+    </div>""", unsafe_allow_html=True)
+
+    if "auth_mode" not in st.session_state:
+        st.session_state.auth_mode = "login"
+
+    mode = st.session_state.auth_mode
+
+    st.markdown('<div class="form-section" style="max-width:420px;margin:0 auto">', unsafe_allow_html=True)
+
+    if mode == "login":
+        st.markdown('<span class="form-label">Entrar na sua conta</span>', unsafe_allow_html=True)
+        email = st.text_input("Email", placeholder="seu@email.com", key="auth_email")
+        password = st.text_input("Senha", type="password", placeholder="••••••••", key="auth_pass")
+
+        if st.button("Entrar", use_container_width=True, key="btn_login"):
+            if not email or not password:
+                st.warning("Preencha email e senha.")
+            else:
+                with st.spinner("Autenticando..."):
+                    session, err = supabase_login(email.strip(), password)
+                if err:
+                    st.error(err)
+                else:
+                    st.session_state.sb_session = session
+                    st.session_state.sb_user_id = session.user.id
+                    st.session_state.sb_email = email.strip()
+                    st.rerun()
+
+        st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+        if st.button("Não tem conta? Criar agora", use_container_width=True,
+                     key="switch_register", type="secondary"):
+            st.session_state.auth_mode = "register"
+            st.rerun()
+
+    else:  # register
+        st.markdown('<span class="form-label">Criar nova conta</span>', unsafe_allow_html=True)
+        nome = st.text_input("Seu nome", placeholder="ex: João", key="auth_nome")
+        email = st.text_input("Email", placeholder="seu@email.com", key="auth_reg_email")
+        password = st.text_input("Senha (mín. 6 caracteres)", type="password",
+                                 placeholder="••••••••", key="auth_reg_pass")
+
+        if st.button("Criar conta", use_container_width=True, key="btn_register"):
+            if not nome or not email or not password:
+                st.warning("Preencha todos os campos.")
+            elif len(password) < 6:
+                st.warning("A senha deve ter pelo menos 6 caracteres.")
+            else:
+                with st.spinner("Criando conta..."):
+                    session, err = supabase_register(email.strip(), password, nome.strip())
+                if err:
+                    st.error(err)
+                else:
+                    if session:
+                        st.session_state.sb_session = session
+                        st.session_state.sb_user_id = session.user.id
+                        st.session_state.sb_email = email.strip()
+                        st.success("Conta criada com sucesso!")
+                        time.sleep(0.5)
+                        st.rerun()
+                    else:
+                        st.info("Conta criada! Verifique seu email para confirmar e depois faça login.")
+                        st.session_state.auth_mode = "login"
+                        time.sleep(1.5)
+                        st.rerun()
+
+        st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+        if st.button("Já tem conta? Fazer login", use_container_width=True,
+                     key="switch_login", type="secondary"):
+            st.session_state.auth_mode = "login"
+            st.rerun()
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+def _load_supabase_data_into_session():
+    """Carrega dados do Supabase para session_state na primeira vez após login."""
+    if st.session_state.get("_sb_loaded"):
+        return  # já carregou nesta sessão
+    user_id = st.session_state.get("sb_user_id")
+    if not user_id:
+        return
+    data = supabase_load_user_data(user_id)
+    if not data:
+        st.session_state._sb_loaded = True
+        return
+
+    # Restaurar perfil do atleta
+    profile_raw = data.get("athlete_profile")
+    if profile_raw:
+        try:
+            profile = json.loads(profile_raw) if isinstance(profile_raw, str) else profile_raw
+            st.session_state.athlete.update(profile)
+        except Exception:
+            pass
+
+    # Restaurar credenciais Strava
+    if data.get("strava_client_id"):
+        st.session_state.client_id = data["strava_client_id"]
+    if data.get("strava_client_secret"):
+        st.session_state.client_secret = data["strava_client_secret"]
+
+    # Restaurar tokens Strava
+    if data.get("strava_tokens"):
+        try:
+            tokens = json.loads(data["strava_tokens"]) if isinstance(data["strava_tokens"], str) else data["strava_tokens"]
+            save_strava_tokens(tokens)
+        except Exception:
+            pass
+
+    # Restaurar treino e métricas
+    if data.get("suggestion"):
+        st.session_state.suggestion = data["suggestion"]
+    if data.get("atl") is not None:
+        st.session_state._atl = data["atl"]
+    if data.get("ctl") is not None:
+        st.session_state._ctl = data["ctl"]
+    if data.get("tsb") is not None:
+        st.session_state._tsb = data["tsb"]
+
+    st.session_state._sb_loaded = True
+
+
 def main():
     st.set_page_config(
         page_title="Strava Running Coach",
@@ -1652,8 +2038,18 @@ def main():
     )
     st.markdown(f"<style>{CSS}</style>", unsafe_allow_html=True)
 
+    # ── Autenticação via Supabase ──
+    if _supabase_available():
+        if not st.session_state.get("sb_session"):
+            _render_auth_screen()
+            return
+
     # Inicializa session state
     init_session_state()
+
+    # Se logado via Supabase, carregar dados do banco
+    if _supabase_available() and st.session_state.get("sb_user_id"):
+        _load_supabase_data_into_session()
 
     # Processa OAuth callback
     if not handle_oauth_callback():
@@ -1678,11 +2074,16 @@ def main():
     with col_status:
         st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
         if connected:
-            nome = ath.get("nome", "")
+            nome = html_mod.escape(ath.get("nome", ""))
             st.markdown(f'<span class="pill pill-green">● Conectado{" · "+nome if nome else ""}</span>',
                         unsafe_allow_html=True)
         else:
             st.markdown('<span class="pill pill-red">● Desconectado</span>', unsafe_allow_html=True)
+        # Logout button (se logado via Supabase)
+        if st.session_state.get("sb_session"):
+            if st.button("Sair", key="btn_logout", type="secondary"):
+                supabase_logout()
+                st.rerun()
 
     st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 
@@ -1766,7 +2167,8 @@ def main():
                             use_container_width=True,
                         )
                     except Exception as e:
-                        st.error(f"Erro ao gerar PDF: {e}")
+                        logging.exception("Erro ao gerar PDF")
+                        st.error("Erro ao gerar PDF. Tente novamente.")
         elif not needs_setup and not needs_connect:
             # Onboarding message — connected but no training generated yet
             st.markdown("""<div class="card" style="text-align:center;padding:2.5rem 2rem">
@@ -1844,14 +2246,22 @@ def main():
 
                         st.session_state.update({"suggestion": sug,
                                                  "_atl": a, "_ctl": c, "_tsb": t})
-                        # Persist training cache (survives screen lock / tab switch)
+                        # Persist training cache
                         _store = _get_persistent_store()
                         _store.update({"suggestion": sug, "_atl": a, "_ctl": c, "_tsb": t})
+                        # Save to Supabase
+                        _uid = st.session_state.get("sb_user_id")
+                        if _uid:
+                            supabase_save_training(_uid, sug, a, c, t)
                         progress_bar.progress(100)
                         _t.sleep(0.3)
                         st.rerun()
+                except StravaLimitError as e:
+                    st.error(str(e))
+                    _render_strava_limit_help()
                 except Exception as e:
-                    st.error(f"Erro ao gerar sugestão: {e}")
+                    logging.exception("Erro ao gerar sugestão")
+                    st.error("Erro ao gerar sugestão. Verifique sua conexão e tente novamente.")
                 finally:
                     progress_box.empty()
                     progress_bar.empty()
@@ -1875,16 +2285,26 @@ def main():
             # Load data
             try:
                 token = get_valid_token(cid, cs)
+            except StravaLimitError as e:
+                st.error(str(e))
+                _render_strava_limit_help()
+                token = None
             except Exception as e:
-                st.error(f"Erro de autenticação: {e}")
+                logging.exception("Erro de autenticação Strava")
+                st.error("Erro de autenticação. Reconecte seu Strava na aba Configurações.")
                 token = None
 
             if token:
                 with st.spinner("Carregando atividades do Strava..."):
                     try:
                         runs = fetch_runs(token)
+                    except StravaLimitError as e:
+                        st.error(str(e))
+                        _render_strava_limit_help()
+                        runs = []
                     except Exception as e:
-                        st.error(f"Erro ao buscar atividades: {e}")
+                        logging.exception("Erro ao buscar atividades")
+                        st.error("Erro ao buscar atividades do Strava. Tente novamente.")
                         runs = []
 
                 if not runs:
@@ -1982,7 +2402,7 @@ def main():
                         pace = fmt_pace(r.get("average_speed"))
                         hr_txt = f'{round(r["average_heartrate"])} bpm' if r.get("average_heartrate") else ""
                         carga = f'{run_load(r, ath):.0f}'
-                        name = r.get("name", "")
+                        name = html_mod.escape(r.get("name", ""))
 
                         hr_chip = (
                             f'<span style="display:inline-block;font-size:0.72rem;font-weight:600;'
@@ -2099,7 +2519,11 @@ def main():
             _store["athlete_dias_descanso"] = selecionados_desc
             _store["athlete_dias_fortalecimento"] = selecionados_fort
             _store["athlete_treinos_semana"] = treinos_v
-            st.success("Configurações de treino salvas na sessão.")
+            # Save to Supabase
+            _uid = st.session_state.get("sb_user_id")
+            if _uid:
+                supabase_save_athlete_profile(_uid, new_ath)
+            st.success("Configurações de treino salvas.")
 
     # ══════════════════════════════════════════
     # TAB 4: CONFIGURAÇÕES APP
@@ -2132,6 +2556,10 @@ def main():
             _store = _get_persistent_store()
             _store["client_id"] = client_id_v
             _store["client_secret"] = client_secret_v
+            # Save to Supabase
+            _uid = st.session_state.get("sb_user_id")
+            if _uid:
+                supabase_save_strava_credentials(_uid, client_id_v, client_secret_v)
             st.success("Credenciais salvas.")
         st.markdown('</div>', unsafe_allow_html=True)
 
@@ -2181,11 +2609,16 @@ def main():
                                         "refresh_token": data["refresh_token"],
                                         "expires_at": data["expires_at"]
                                     })
-                                    st.success(f"Conectado! Bem-vindo, "
-                                               f"{data.get('athlete',{}).get('firstname','Atleta')}!")
+                                    firstname = html_mod.escape(
+                                        data.get('athlete',{}).get('firstname','Atleta'))
+                                    st.success(f"Conectado! Bem-vindo, {firstname}!")
                                     st.rerun()
+                                except StravaLimitError as e:
+                                    st.error(str(e))
+                                    _render_strava_limit_help()
                                 except Exception as e:
-                                    st.error(f"Erro: {e}")
+                                    logging.exception("Erro na conexão manual Strava")
+                                    st.error("Erro na conexão. Verifique a URL e tente novamente.")
             else:
                 st.info("Preencha o Client ID do Strava acima para conectar.")
         st.markdown('</div>', unsafe_allow_html=True)
