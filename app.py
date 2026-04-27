@@ -562,12 +562,19 @@ def _supabase_available():
 
 
 # ── Auth helpers ─────────────────────────────
+# O Supabase Auth exige email, mas o usuário só informa nome + Strava Client ID + senha.
+# Internamente criamos um email fictício: {strava_client_id}@coach.local
 
-def supabase_register(email: str, password: str, nome: str):
-    """Registra novo usuário e cria perfil na tabela user_profiles."""
+def _make_internal_email(strava_id: str) -> str:
+    """Gera email interno a partir do Strava Client ID (o usuário nunca vê)."""
+    return f"{strava_id.strip()}@coach.local"
+
+def supabase_register(strava_id: str, password: str, nome: str):
+    """Registra novo usuário usando Strava Client ID como identificador."""
     sb = _get_supabase_client()
     if not sb:
         return None, "Supabase não configurado."
+    email = _make_internal_email(strava_id)
     try:
         res = sb.auth.sign_up({"email": email, "password": password})
         if res.user:
@@ -576,6 +583,7 @@ def supabase_register(email: str, password: str, nome: str):
                 "id": res.user.id,
                 "email": email,
                 "nome": nome,
+                "strava_client_id": strava_id.strip(),
                 "athlete_profile": json.dumps({
                     "nome": nome,
                     "nivel": "intermediário",
@@ -593,15 +601,16 @@ def supabase_register(email: str, password: str, nome: str):
     except Exception as e:
         msg = str(e)
         if "already registered" in msg.lower() or "already been registered" in msg.lower():
-            return None, "Este email já está cadastrado. Faça login."
+            return None, "Este Strava ID já está cadastrado. Faça login."
         logging.exception("Erro no registro Supabase")
         return None, "Erro ao criar conta. Verifique os dados e tente novamente."
 
-def supabase_login(email: str, password: str):
-    """Faz login e retorna session."""
+def supabase_login(strava_id: str, password: str):
+    """Faz login usando Strava Client ID + senha."""
     sb = _get_supabase_client()
     if not sb:
         return None, "Supabase não configurado."
+    email = _make_internal_email(strava_id)
     try:
         res = sb.auth.sign_in_with_password({"email": email, "password": password})
         if res.session:
@@ -610,7 +619,7 @@ def supabase_login(email: str, password: str):
     except Exception as e:
         msg = str(e)
         if "invalid" in msg.lower():
-            return None, "Email ou senha incorretos."
+            return None, "Strava ID ou senha incorretos."
         logging.exception("Erro no login Supabase")
         return None, "Erro ao fazer login. Tente novamente."
 
@@ -1912,7 +1921,8 @@ def render_weekly_km_chart(weekly_data):
 # ══════════════════════════════════════════════
 
 def _render_auth_screen():
-    """Renderiza tela de login/registro com design Apple-inspired."""
+    """Renderiza tela de login/registro com design Apple-inspired.
+       Usa nome + Strava Client ID + senha (sem email)."""
     st.markdown("""<div style="max-width:420px;margin:3rem auto;text-align:center">
         <div style="font-size:3rem;margin-bottom:0.5rem">🏃</div>
         <p class="page-title" style="font-size:1.8rem;margin-bottom:0.3rem">Running Coach</p>
@@ -1928,21 +1938,23 @@ def _render_auth_screen():
 
     if mode == "login":
         st.markdown('<span class="form-label">Entrar na sua conta</span>', unsafe_allow_html=True)
-        email = st.text_input("Email", placeholder="seu@email.com", key="auth_email")
-        password = st.text_input("Senha", type="password", placeholder="••••••••", key="auth_pass")
+        strava_id = st.text_input("Strava Client ID", placeholder="ex: 214364",
+                                  key="auth_strava_id")
+        password = st.text_input("Senha", type="password", placeholder="••••••••",
+                                 key="auth_pass")
 
         if st.button("Entrar", use_container_width=True, key="btn_login"):
-            if not email or not password:
-                st.warning("Preencha email e senha.")
+            if not strava_id or not password:
+                st.warning("Preencha o Strava Client ID e a senha.")
             else:
                 with st.spinner("Autenticando..."):
-                    session, err = supabase_login(email.strip(), password)
+                    session, err = supabase_login(strava_id.strip(), password)
                 if err:
                     st.error(err)
                 else:
                     st.session_state.sb_session = session
                     st.session_state.sb_user_id = session.user.id
-                    st.session_state.sb_email = email.strip()
+                    st.session_state.sb_strava_id = strava_id.strip()
                     st.rerun()
 
         st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
@@ -1954,30 +1966,43 @@ def _render_auth_screen():
     else:  # register
         st.markdown('<span class="form-label">Criar nova conta</span>', unsafe_allow_html=True)
         nome = st.text_input("Seu nome", placeholder="ex: João", key="auth_nome")
-        email = st.text_input("Email", placeholder="seu@email.com", key="auth_reg_email")
+        strava_id = st.text_input("Strava Client ID", placeholder="ex: 214364",
+                                  key="auth_reg_strava_id",
+                                  help="Encontre em strava.com/settings/api")
         password = st.text_input("Senha (mín. 6 caracteres)", type="password",
                                  placeholder="••••••••", key="auth_reg_pass")
 
+        st.markdown(
+            '<p style="font-size:0.78rem;color:#6E6E73;margin-top:0.5rem">'
+            'Não tem um Strava Client ID? '
+            '<a href="https://www.strava.com/settings/api" target="_blank" '
+            'style="color:#FC4C02;font-weight:600">Crie seu app no Strava</a> '
+            '(leva 2 minutos)</p>',
+            unsafe_allow_html=True)
+
         if st.button("Criar conta", use_container_width=True, key="btn_register"):
-            if not nome or not email or not password:
+            if not nome or not strava_id or not password:
                 st.warning("Preencha todos os campos.")
             elif len(password) < 6:
                 st.warning("A senha deve ter pelo menos 6 caracteres.")
+            elif not strava_id.strip().isdigit():
+                st.warning("O Strava Client ID deve conter apenas números.")
             else:
                 with st.spinner("Criando conta..."):
-                    session, err = supabase_register(email.strip(), password, nome.strip())
+                    session, err = supabase_register(
+                        strava_id.strip(), password, nome.strip())
                 if err:
                     st.error(err)
                 else:
                     if session:
                         st.session_state.sb_session = session
                         st.session_state.sb_user_id = session.user.id
-                        st.session_state.sb_email = email.strip()
+                        st.session_state.sb_strava_id = strava_id.strip()
                         st.success("Conta criada com sucesso!")
                         time.sleep(0.5)
                         st.rerun()
                     else:
-                        st.info("Conta criada! Verifique seu email para confirmar e depois faça login.")
+                        st.info("Conta criada! Faça login para continuar.")
                         st.session_state.auth_mode = "login"
                         time.sleep(1.5)
                         st.rerun()
