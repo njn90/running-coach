@@ -2,3 +2,4 @@ streamlit>=1.30.0
 requests
 reportlab
 pandas
+supabase>=2.0.0

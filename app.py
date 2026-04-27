@@ -12,7 +12,13 @@ from urllib.parse import urlparse, parse_qs
 
 import requests
 import streamlit as st
-from supabase import create_client, Client as SupabaseClient
+
+try:
+    from supabase import create_client, Client as SupabaseClient
+    _HAS_SUPABASE = True
+except ImportError:
+    _HAS_SUPABASE = False
+    SupabaseClient = None
 
 # ══════════════════════════════════════════════
 # CONSTANTS & CLOUD CONFIG
@@ -538,8 +544,10 @@ hr { border: none !important; border-top: 1.5px solid rgba(0,0,0,0.06) !importan
 # Authentication → Settings → desabilitar "Enable email confirmations"
 
 @st.cache_resource
-def _get_supabase_client() -> SupabaseClient:
+def _get_supabase_client():
     """Cria client Supabase singleton a partir de st.secrets."""
+    if not _HAS_SUPABASE:
+        return None
     url = _get_secret("supabase_url", "")
     key = _get_secret("supabase_anon_key", "")
     if not url or not key:
@@ -547,7 +555,9 @@ def _get_supabase_client() -> SupabaseClient:
     return create_client(url, key)
 
 def _supabase_available():
-    """Retorna True se Supabase está configurado."""
+    """Retorna True se Supabase está instalado e configurado."""
+    if not _HAS_SUPABASE:
+        return False
     return _get_supabase_client() is not None
 
 
