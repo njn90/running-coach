@@ -5,9 +5,10 @@ Design system: Apple-inspired · Bento Grid · Inter font
 Cloud-adapted: session_state para tudo, st.secrets opcional como pré-preenchimento, OAuth via query params
 """
 
+import hashlib
 import html as html_mod
 import json, logging, re, time, uuid, warnings
-from datetime import datetime, timedelta
+from datetime import datetime, date, timedelta
 from urllib.parse import urlparse, parse_qs
 
 import requests
@@ -678,6 +679,99 @@ def supabase_save_strava_tokens(user_id: str, tokens):
     """Salva tokens OAuth do Strava."""
     supabase_save_field(user_id,
                         strava_tokens=json.dumps(tokens) if tokens else None)
+
+
+# ── Weekly Training CRUD ────────────────────
+
+def _config_hash(ath: dict) -> str:
+    """Gera hash SHA-256 dos campos de configuração relevantes do atleta."""
+    fields = {
+        "objetivo": ath.get("objetivo", ""),
+        "treinos_semana": ath.get("treinos_semana", 3),
+        "nivel": ath.get("nivel", ""),
+        "dias_descanso": sorted(ath.get("dias_descanso", [])),
+        "dias_fortalecimento": sorted(ath.get("dias_fortalecimento", [])),
+        "fc_max": ath.get("fc_max", 185),
+        "fc_repouso": ath.get("fc_repouso", 50),
+        "pace_limiar": ath.get("pace_limiar", ""),
+        "prova_alvo": ath.get("prova_alvo", ""),
+        "data_prova": ath.get("data_prova", ""),
+    }
+    raw = json.dumps(fields, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+def _current_week_start() -> date:
+    """Retorna a segunda-feira da semana atual (semana = Seg-Dom)."""
+    today = date.today()
+    return today - timedelta(days=today.weekday())
+
+def supabase_save_weekly_training(user_id: str, week_start: date,
+                                   suggestion: str, atl: float, ctl: float,
+                                   tsb: float, config_hash: str):
+    """Salva (ou substitui) o treino semanal no Supabase via upsert."""
+    sb = _get_supabase_client()
+    if not sb or not user_id:
+        return
+    try:
+        sb.table("weekly_trainings").upsert({
+            "user_id": user_id,
+            "week_start": week_start.isoformat(),
+            "suggestion": suggestion,
+            "atl": atl,
+            "ctl": ctl,
+            "tsb": tsb,
+            "config_hash": config_hash,
+            "created_at": datetime.now().isoformat(),
+        }, on_conflict="user_id,week_start").execute()
+    except Exception:
+        logging.exception("Erro ao salvar treino semanal")
+
+def supabase_load_current_week_training(user_id: str) -> dict | None:
+    """Carrega treino da semana atual (se existir)."""
+    sb = _get_supabase_client()
+    if not sb or not user_id:
+        return None
+    try:
+        ws = _current_week_start().isoformat()
+        res = (sb.table("weekly_trainings")
+               .select("*")
+               .eq("user_id", user_id)
+               .eq("week_start", ws)
+               .execute())
+        data = res.data
+        return data[0] if data else None
+    except Exception:
+        logging.exception("Erro ao carregar treino semanal")
+        return None
+
+def supabase_load_recent_weekly_trainings(user_id: str, weeks: int = 4) -> list:
+    """Carrega os treinos das últimas N semanas (ordem decrescente)."""
+    sb = _get_supabase_client()
+    if not sb or not user_id:
+        return []
+    try:
+        cutoff = (_current_week_start() - timedelta(weeks=weeks)).isoformat()
+        res = (sb.table("weekly_trainings")
+               .select("*")
+               .eq("user_id", user_id)
+               .gte("week_start", cutoff)
+               .order("week_start", desc=True)
+               .execute())
+        return res.data or []
+    except Exception:
+        logging.exception("Erro ao carregar histórico de treinos")
+        return []
+
+def supabase_cleanup_old_trainings(user_id: str, keep_weeks: int = 5):
+    """Remove treinos com mais de keep_weeks semanas."""
+    sb = _get_supabase_client()
+    if not sb or not user_id:
+        return
+    try:
+        cutoff = (_current_week_start() - timedelta(weeks=keep_weeks)).isoformat()
+        sb.table("weekly_trainings").delete().eq("user_id", user_id).lt("week_start", cutoff).execute()
+    except Exception:
+        logging.exception("Erro ao limpar treinos antigos")
 
 
 # ══════════════════════════════════════════════
@@ -2016,6 +2110,65 @@ def _render_auth_screen():
     st.markdown('</div>', unsafe_allow_html=True)
 
 
+def _render_training_history(user_id: str):
+    """Renderiza histórico de treinos das últimas 4 semanas (Apple design)."""
+    trainings = supabase_load_recent_weekly_trainings(user_id, weeks=4)
+    current_ws = _current_week_start().isoformat()
+    # Filtrar treino da semana atual (já mostrado acima)
+    past = [t for t in trainings if t.get("week_start") != current_ws]
+
+    if not past:
+        st.markdown(
+            '<div class="card" style="text-align:center;padding:2rem">'
+            '<p style="font-size:1.5rem;margin-bottom:0.5rem">📭</p>'
+            '<p class="body-text" style="color:#6E6E73">'
+            'Nenhum treino anterior encontrado.</p></div>',
+            unsafe_allow_html=True)
+        return
+
+    st.markdown(
+        '<p class="section-title" style="margin-top:1rem;margin-bottom:0.8rem">'
+        'Treinos anteriores</p>',
+        unsafe_allow_html=True)
+
+    for t in past:
+        try:
+            ws = datetime.strptime(t["week_start"], "%Y-%m-%d").date()
+        except Exception:
+            continue
+        we = ws + timedelta(days=6)
+        label = f"Semana {ws.strftime('%d/%m')} — {we.strftime('%d/%m/%Y')}"
+
+        with st.expander(label, expanded=False):
+            sug = t.get("suggestion", "")
+            if sug:
+                plan = parse_weekly_plan(sug)
+                if plan:
+                    render_weekly_cards(plan, suggestion=sug)
+                else:
+                    st.markdown(
+                        f'<div class="body-text" style="white-space:pre-wrap">'
+                        f'{html_mod.escape(sug[:2000])}</div>',
+                        unsafe_allow_html=True)
+            # Métricas resumidas
+            atl_v = t.get("atl")
+            ctl_v = t.get("ctl")
+            tsb_v = t.get("tsb")
+            if atl_v is not None and ctl_v is not None and tsb_v is not None:
+                st.markdown(
+                    f'<div style="display:flex;gap:1rem;margin-top:0.6rem;flex-wrap:wrap">'
+                    f'<span class="pill" style="font-size:0.75rem;background:#F5F5F7;'
+                    f'padding:0.3rem 0.7rem;border-radius:8px;color:#6E6E73">'
+                    f'ATL {atl_v:.0f}</span>'
+                    f'<span class="pill" style="font-size:0.75rem;background:#F5F5F7;'
+                    f'padding:0.3rem 0.7rem;border-radius:8px;color:#6E6E73">'
+                    f'CTL {ctl_v:.0f}</span>'
+                    f'<span class="pill" style="font-size:0.75rem;background:#F5F5F7;'
+                    f'padding:0.3rem 0.7rem;border-radius:8px;color:#6E6E73">'
+                    f'TSB {tsb_v:+.1f}</span></div>',
+                    unsafe_allow_html=True)
+
+
 def _load_supabase_data_into_session():
     """Carrega dados do Supabase para session_state na primeira vez após login."""
     if st.session_state.get("_sb_loaded"):
@@ -2155,6 +2308,18 @@ def main():
     # ══════════════════════════════════════════
     if active_tab == 0:
 
+        # ── Verificar treino da semana atual no Supabase ──
+        _uid = st.session_state.get("sb_user_id")
+        existing_week_training = None
+        if _supabase_available() and _uid:
+            existing_week_training = supabase_load_current_week_training(_uid)
+            # Se existe treino da semana e ainda não tem no session_state, restaurar
+            if existing_week_training and not st.session_state.suggestion:
+                st.session_state.suggestion = existing_week_training.get("suggestion")
+                st.session_state._atl = existing_week_training.get("atl")
+                st.session_state._ctl = existing_week_training.get("ctl")
+                st.session_state._tsb = existing_week_training.get("tsb")
+
         if needs_setup or needs_connect:
             st.markdown(f"""<div class="card" style="text-align:center;padding:3rem 2rem">
                 <div style="font-size:3rem;margin-bottom:1rem">{'🔑' if needs_setup else '🔗'}</div>
@@ -2167,6 +2332,17 @@ def main():
 
         # Show weekly plan cards if a suggestion exists
         elif st.session_state.suggestion:
+            # Mostrar período da semana
+            ws = _current_week_start()
+            we = ws + timedelta(days=6)
+            dias_pt_full = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
+            st.markdown(
+                f'<div style="text-align:center;margin-bottom:0.8rem">'
+                f'<span style="font-size:0.78rem;color:#6E6E73;font-weight:500;'
+                f'letter-spacing:0.04em;text-transform:uppercase">'
+                f'Semana {ws.strftime("%d/%m")} — {we.strftime("%d/%m/%Y")}</span></div>',
+                unsafe_allow_html=True)
+
             plan = parse_weekly_plan(st.session_state.suggestion)
             if plan:
                 st.markdown('<p class="section-title" style="margin-bottom:1rem">Plano da semana</p>',
@@ -2204,6 +2380,17 @@ def main():
                     except Exception as e:
                         logging.exception("Erro ao gerar PDF")
                         st.error("Erro ao gerar PDF. Tente novamente.")
+
+            # ── Botão histórico de treinos ──
+            st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
+            if st.button("📅 Ver treinos anteriores", key="btn_historico",
+                         use_container_width=True, type="secondary"):
+                st.session_state._show_historico = not st.session_state.get("_show_historico", False)
+                st.rerun()
+
+            if st.session_state.get("_show_historico") and _supabase_available() and _uid:
+                _render_training_history(_uid)
+
         elif not needs_setup and not needs_connect:
             # Onboarding message — connected but no training generated yet
             st.markdown("""<div class="card" style="text-align:center;padding:2.5rem 2rem">
@@ -2234,14 +2421,69 @@ def main():
                 </div>""", unsafe_allow_html=True)
                 st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 
+            # ── Determinar se pode gerar (lógica semanal) ──
+            current_hash = _config_hash(ath)
+            has_training_this_week = existing_week_training is not None
+            config_changed = (has_training_this_week and
+                              existing_week_training.get("config_hash") != current_hash)
+
+            # Informar sobre estado do treino semanal
+            if has_training_this_week and not config_changed:
+                st.markdown(
+                    '<div class="card-sm" style="text-align:center;padding:1rem;'
+                    'background:#E8F5E9;border:1.5px solid rgba(52,199,89,0.2)">'
+                    '<span style="font-size:0.88rem;color:#2E7D32;font-weight:500">'
+                    '✅ Treino da semana já gerado — altere configurações para gerar um novo'
+                    '</span></div>',
+                    unsafe_allow_html=True)
+                st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+
             # ── Generate button at BOTTOM ──
             btn_label = "🧘 Ver sugestão de recuperação" if eh_desc else "🏃 Gerar treino semanal"
 
+            # Bloquear se treino já existe e config não mudou
+            btn_disabled = has_training_this_week and not config_changed
+
             col_btn, col_sp = st.columns([1, 2])
             with col_btn:
-                gerar = st.button(btn_label, use_container_width=True, key="gen_treino")
+                gerar = st.button(btn_label, use_container_width=True, key="gen_treino",
+                                  disabled=btn_disabled)
 
-        if gerar:
+        # ── Confirmação de substituição ──
+        if gerar and existing_week_training is not None:
+            st.session_state._confirm_replace = True
+            gerar = False  # Não gerar ainda, aguardar confirmação
+
+        if st.session_state.get("_confirm_replace"):
+            ws = _current_week_start()
+            we = ws + timedelta(days=6)
+            st.markdown(
+                f'<div class="card" style="border-left:4px solid #FF9500;padding:1.2rem 1.4rem">'
+                f'<p class="section-title" style="color:#FF9500;font-size:0.95rem;margin-bottom:0.5rem">'
+                f'⚠️ Substituir treino existente?</p>'
+                f'<p class="body-text" style="color:#6E6E73;font-size:0.85rem;margin-bottom:1rem">'
+                f'Já existe um treino gerado para a semana de '
+                f'{ws.strftime("%d/%m")} a {we.strftime("%d/%m")}. '
+                f'O treino atual será substituído pelo novo.</p></div>',
+                unsafe_allow_html=True)
+            st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+            c_yes, c_no, _ = st.columns([1, 1, 2])
+            with c_yes:
+                if st.button("Sim, substituir", key="confirm_replace_yes",
+                             use_container_width=True):
+                    st.session_state._confirm_replace = False
+                    st.session_state._do_generate = True
+                    st.rerun()
+            with c_no:
+                if st.button("Cancelar", key="confirm_replace_no",
+                             use_container_width=True, type="secondary"):
+                    st.session_state._confirm_replace = False
+                    st.rerun()
+
+        # ── Executar geração ──
+        do_generate = gerar or st.session_state.pop("_do_generate", False)
+
+        if do_generate:
             if not ath.get("nome"):
                 st.warning("Preencha seu perfil em Configurações treino antes de gerar o treino.")
             elif not ath.get("objetivo", "").strip():
@@ -2284,10 +2526,13 @@ def main():
                         # Persist training cache
                         _store = _get_persistent_store()
                         _store.update({"suggestion": sug, "_atl": a, "_ctl": c, "_tsb": t})
-                        # Save to Supabase
-                        _uid = st.session_state.get("sb_user_id")
+                        # Save to Supabase (user_profiles + weekly_trainings)
                         if _uid:
                             supabase_save_training(_uid, sug, a, c, t)
+                            ch = _config_hash(ath)
+                            supabase_save_weekly_training(
+                                _uid, _current_week_start(), sug, a, c, t, ch)
+                            supabase_cleanup_old_trainings(_uid)
                         progress_bar.progress(100)
                         _t.sleep(0.3)
                         st.rerun()
