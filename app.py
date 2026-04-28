@@ -926,26 +926,34 @@ def _render_strava_limit_help():
 def _req(method, url, **kw):
     return getattr(requests, method)(url, timeout=15, **kw)
 
-def _check_strava_limit(response):
-    """Verifica se a resposta do Strava indica limite de atletas excedido."""
+def _check_strava_error(response):
+    """Verifica erros do Strava e mostra diagnóstico real."""
     if response.status_code == 403:
-        body = ""
+        body_raw = ""
         try:
-            body = response.text.lower()
+            body_raw = response.text
         except Exception:
             pass
-        if "athlete" in body or "limit" in body or response.status_code == 403:
+        body = body_raw.lower()
+        logging.error(f"Strava 403 — resposta: {body_raw[:500]}")
+        if "athlete" in body and "limit" in body:
             raise StravaLimitError(
                 "O app Strava atingiu o limite de atletas conectados. "
                 "Crie seu próprio app em strava.com/settings/api e insira "
                 "seu Client ID e Secret na aba ⚙️ Config App."
             )
+        # Outros 403: credenciais inválidas, app não autorizado, etc.
+        raise Exception(
+            f"Erro 403 do Strava: {body_raw[:300] or 'Acesso negado'}. "
+            "Verifique se o Client ID e Secret estão corretos na aba 🔧 Config App."
+        )
 
 def exchange_code(cid, cs, code):
+    logging.info(f"exchange_code — client_id usado: {cid[:4]}***" if cid else "exchange_code — SEM client_id")
     r = _req("post", "https://www.strava.com/oauth/token",
              data={"client_id": cid, "client_secret": cs,
                    "code": code, "grant_type": "authorization_code"})
-    _check_strava_limit(r)
+    _check_strava_error(r)
     r.raise_for_status()
     return r.json()
 
@@ -953,7 +961,7 @@ def refresh_strava_token(cid, cs, rt):
     r = _req("post", "https://www.strava.com/oauth/token",
              data={"client_id": cid, "client_secret": cs,
                    "refresh_token": rt, "grant_type": "refresh_token"})
-    _check_strava_limit(r)
+    _check_strava_error(r)
     r.raise_for_status()
     return r.json()
 
@@ -1069,7 +1077,7 @@ def fetch_runs(token, days=28):
     r = _req("get", "https://www.strava.com/api/v3/athlete/activities",
              headers={"Authorization": f"Bearer {token}"},
              params={"after": after, "per_page": 50})
-    _check_strava_limit(r)
+    _check_strava_error(r)
     r.raise_for_status()
     all_types = RUN_TYPES | WALK_TYPES
     activities = [a for a in r.json() if (a.get("sport_type") or a.get("type")) in all_types]
