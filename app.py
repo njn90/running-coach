@@ -2901,6 +2901,33 @@ def main():
                                     st.error("Erro na conexão. Verifique a URL e tente novamente.")
             else:
                 st.info("Preencha o Client ID do Strava acima para conectar.")
+
+        # ── Resetar conexão Strava ──
+        st.markdown("<div style='height:0.8rem'></div>", unsafe_allow_html=True)
+        with st.expander("Problemas de conexão?"):
+            st.markdown(
+                '<p style="font-size:0.85rem;color:#6E6E73;margin-bottom:0.8rem">'
+                'Se você está vendo erro 403 ou problemas de limite de atletas, '
+                'clique abaixo para limpar tokens e credenciais antigas e reconectar do zero.</p>',
+                unsafe_allow_html=True)
+            if st.button("🔄 Resetar conexão Strava", key="reset_strava",
+                         use_container_width=True, type="secondary"):
+                # Limpar tokens e credenciais em session_state
+                st.session_state.strava_tokens = None
+                st.session_state.client_secret = ""
+                # Limpar persistent store
+                _store = _get_persistent_store()
+                _store["strava_tokens"] = None
+                _store["client_secret"] = None
+                # Limpar no Supabase
+                _uid = st.session_state.get("sb_user_id")
+                if _uid:
+                    supabase_save_strava_tokens(_uid, None)
+                    supabase_save_field(_uid, strava_client_secret="")
+                st.success("Conexão resetada. Insira seu Client Secret e reconecte.")
+                time.sleep(1)
+                st.rerun()
+
         st.markdown('</div>', unsafe_allow_html=True)
 
 
