@@ -625,15 +625,18 @@ def supabase_login(strava_id: str, password: str):
         return None, "Erro ao fazer login. Tente novamente."
 
 def supabase_logout():
-    """Faz logout e limpa session_state."""
+    """Faz logout e limpa session_state (preserva último Strava ID para conveniência)."""
     sb = _get_supabase_client()
     if sb:
         try:
             sb.auth.sign_out()
         except Exception:
             pass
+    last_id = st.session_state.get("_last_strava_id", "")
     for key in list(st.session_state.keys()):
         del st.session_state[key]
+    if last_id:
+        st.session_state._last_strava_id = last_id
 
 
 # ── Supabase CRUD ────────────────────────────
@@ -824,12 +827,11 @@ def init_session_state():
         "_ctl": None,
         "_tsb": None,
         "active_tab": 0,
-        # Credenciais via st.secrets (configuradas no painel do Streamlit Cloud)
-        "client_id": _get_secret("client_id", ""),
-        "client_secret": _get_secret("client_secret", ""),
+        # Strava credentials — vêm exclusivamente do input do usuário / Supabase
+        "client_id": "",
+        "client_secret": "",
         # anthropic_key is accessed ONLY via st.secrets — never stored in session_state
-        "redirect_uri": _get_secret("redirect_uri",
-            "https://stravarunningcoach.streamlit.app"),
+        "redirect_uri": "https://stravarunningcoach.streamlit.app",
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -2032,7 +2034,9 @@ def _render_auth_screen():
 
     if mode == "login":
         st.markdown('<span class="form-label">Entrar na sua conta</span>', unsafe_allow_html=True)
-        strava_id = st.text_input("Strava Client ID", placeholder="ex: 214364",
+        _last_id = st.session_state.get("_last_strava_id", "")
+        strava_id = st.text_input("Strava Client ID", value=_last_id,
+                                  placeholder="ex: 214364",
                                   key="auth_strava_id")
         password = st.text_input("Senha", type="password", placeholder="••••••••",
                                  key="auth_pass")
@@ -2049,6 +2053,7 @@ def _render_auth_screen():
                     st.session_state.sb_session = session
                     st.session_state.sb_user_id = session.user.id
                     st.session_state.sb_strava_id = strava_id.strip()
+                    st.session_state._last_strava_id = strava_id.strip()
                     st.rerun()
 
         st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
@@ -2092,6 +2097,7 @@ def _render_auth_screen():
                         st.session_state.sb_session = session
                         st.session_state.sb_user_id = session.user.id
                         st.session_state.sb_strava_id = strava_id.strip()
+                        st.session_state._last_strava_id = strava_id.strip()
                         st.success("Conta criada com sucesso!")
                         time.sleep(0.5)
                         st.rerun()
@@ -2820,18 +2826,12 @@ def main():
                                         placeholder="214364",
                                         key="app_client_id")
         with c2:
-            client_secret_v = st.text_input("Strava Client Secret", value=cs,
+            client_secret_v = st.text_input("Strava Client Secret",
                                             type="password", placeholder="••••••••",
                                             key="app_client_secret")
-        redirect_v = st.text_input("URL do App (para OAuth)",
-                                   value=st.session_state.get("redirect_uri", ""),
-                                   placeholder="https://seu-app.streamlit.app",
-                                   help="Cole aqui a URL do seu app no Streamlit Cloud",
-                                   key="app_redirect_uri")
         if st.button("Salvar credenciais", key="save_creds"):
             st.session_state.client_id = client_id_v
             st.session_state.client_secret = client_secret_v
-            st.session_state.redirect_uri = redirect_v
             # Persist credentials in cache (survives session resets)
             _store = _get_persistent_store()
             _store["client_id"] = client_id_v
